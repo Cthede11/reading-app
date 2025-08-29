@@ -14,18 +14,6 @@ const PORT = process.env.PORT || 5000;
 app.use(cors());
 app.use(express.json());
 
-// Shared HTTP client with realistic browser-like headers
-const http = axios.create({
-  timeout: 15000,
-  headers: {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36',
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-    'Accept-Language': 'en-US,en;q=0.9',
-    'Cache-Control': 'no-cache',
-    'Pragma': 'no-cache'
-  }
-});
-
 // Config flags
 const ENABLE_JINA_PROXY = (process.env.ENABLE_JINA_PROXY || 'true').toLowerCase() === 'true';
 const MAX_RETRIES = Math.max(0, parseInt(process.env.MAX_RETRIES || '2', 10));
@@ -33,162 +21,157 @@ const REQUEST_DELAY_MS_MIN = Math.max(0, parseInt(process.env.REQUEST_DELAY_MS_M
 const REQUEST_DELAY_MS_MAX = Math.max(REQUEST_DELAY_MS_MIN, parseInt(process.env.REQUEST_DELAY_MS_MAX || '200', 10));
 
 // Simple in-memory caches (TTL in ms)
-const searchCache = new Map(); // key: `source|query` -> { expiresAt, data }
-const detailsCache = new Map(); // key: `source|url` -> { expiresAt, data }
-const chapterCache = new Map(); // key: `source|url` -> { expiresAt, data }
-const SEARCH_TTL_MS = Math.max(60_000, parseInt(process.env.SEARCH_TTL_MS || '600000', 10)); // 10 min
-const DETAILS_TTL_MS = Math.max(60_000, parseInt(process.env.DETAILS_TTL_MS || '1800000', 10)); // 30 min
-const CHAPTER_TTL_MS = Math.max(60_000, parseInt(process.env.CHAPTER_TTL_MS || '7200000', 10)); // 120 min
+const searchCache = new Map();
+const detailsCache = new Map();
+const chapterCache = new Map();
 
-function getRandomUserAgent() {
-  const agents = [
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 13_5) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Safari/605.1.15',
-    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:127.0) Gecko/20100101 Firefox/127.0'
-  ];
-  return agents[Math.floor(Math.random() * agents.length)];
-}
+const SEARCH_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const DETAILS_TTL_MS = 30 * 60 * 1000; // 30 minutes
+const CHAPTER_TTL_MS = 60 * 60 * 1000; // 60 minutes
 
+// Utility functions
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 function getJitterDelay() {
-  if (REQUEST_DELAY_MS_MAX <= REQUEST_DELAY_MS_MIN) return REQUEST_DELAY_MS_MIN;
-  const delta = REQUEST_DELAY_MS_MAX - REQUEST_DELAY_MS_MIN;
-  return REQUEST_DELAY_MS_MIN + Math.floor(Math.random() * (delta + 1));
+  return REQUEST_DELAY_MS_MIN + Math.random() * (REQUEST_DELAY_MS_MAX - REQUEST_DELAY_MS_MIN);
 }
 
-function toAbsoluteUrl(link, base) {
-  if (!link) return link;
+function getRandomUserAgent() {
+  const agents = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15'
+  ];
+  return agents[Math.floor(Math.random() * agents.length)];
+}
+
+function toAbsoluteUrl(href, baseUrl) {
+  if (!href) return '';
   try {
-    const u = new URL(link);
-    return u.href;
-  } catch (_) {
-    try {
-      return new URL(link, base).href;
-    } catch (_) {
-      return link;
-    }
+    if (href.startsWith('http')) return href;
+    const base = new URL(baseUrl);
+    return new URL(href, base).href;
+  } catch (e) {
+    return '';
   }
 }
 
-async function performGet(url, opts = {}) {
-  const retryStatuses = new Set([429, 500, 502, 503, 504]);
-  let attempt = 0;
-  let lastErr;
-  while (attempt <= MAX_RETRIES) {
-    try {
-      const ua = getRandomUserAgent();
-      const headers = Object.assign({}, opts.headers || {}, { 'User-Agent': ua });
-      const res = await http.get(url, { headers });
-      return res;
-    } catch (err) {
-      lastErr = err;
-      const status = err?.response?.status;
-      const retriable = retryStatuses.has(status) || !status;
-      if (!retriable || attempt === MAX_RETRIES) {
-        throw err;
+// Shared HTTP client with enhanced headers
+const http = axios.create({
+  timeout: 20000,
+  headers: {
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Accept-Encoding': 'gzip, deflate, br',
+    'Cache-Control': 'no-cache',
+    'Pragma': 'no-cache',
+    'Sec-Fetch-Dest': 'document',
+    'Sec-Fetch-Mode': 'navigate',
+    'Sec-Fetch-Site': 'none',
+    'Sec-Fetch-User': '?1',
+    'Upgrade-Insecure-Requests': '1'
+  }
+});
+
+// Fetch with fallback to Jina proxy
+async function fetchWithFallback(url, retries = 0) {
+  try {
+    console.log(`[FETCH] Attempting: ${url} (retry: ${retries})`);
+    const response = await http.get(url, {
+      headers: {
+        'User-Agent': getRandomUserAgent()
       }
-      const backoff = Math.min(2000 * Math.pow(2, attempt), 8000);
-      await sleep(backoff + getJitterDelay());
-      attempt += 1;
+    });
+    return { data: response.data, viaJina: false };
+  } catch (error) {
+    console.warn(`[FETCH] Direct fetch failed for ${url}: ${error.message}`);
+    
+    if (ENABLE_JINA_PROXY && retries < MAX_RETRIES) {
+      try {
+        console.log(`[FETCH] Trying Jina proxy for: ${url}`);
+        const jinaUrl = `https://r.jina.ai/${url}`;
+        const response = await http.get(jinaUrl, {
+          headers: {
+            'User-Agent': getRandomUserAgent()
+          }
+        });
+        return { data: response.data, viaJina: true };
+      } catch (jinaError) {
+        console.warn(`[FETCH] Jina proxy failed for ${url}: ${jinaError.message}`);
+      }
     }
-  }
-  throw lastErr;
-}
-
-function toJinaUrl(originalUrl) {
-  try {
-    const u = new URL(originalUrl);
-    return `https://r.jina.ai/http://${u.host}${u.pathname}${u.search}`;
-  } catch (_) {
-    return originalUrl;
-  }
-}
-
-async function fetchWithFallback(url, headers) {
-  try {
-    const res = await performGet(url, { headers });
-    return { data: res.data, viaJina: false };
-  } catch (err) {
-    const status = err?.response?.status;
-    if (ENABLE_JINA_PROXY && (status === 403 || status === 503)) {
-      const jinaUrl = toJinaUrl(url);
-      const res = await performGet(jinaUrl, { headers: {} });
-      return { data: res.data, viaJina: true };
+    
+    if (retries < MAX_RETRIES) {
+      await sleep(2000 * (retries + 1));
+      return fetchWithFallback(url, retries + 1);
     }
-    throw err;
+    
+    throw error;
   }
 }
 
-function extractMarkdownLinks(markdown, hostFilter, pathIncludes = []) {
-  if (typeof markdown !== 'string') return [];
-  const results = [];
-  const seen = new Set();
-  const linkRegex = /\[([^\]]{2,200})\]\((https?:\/\/[^)]+)\)/g;
-  let m;
-  while ((m = linkRegex.exec(markdown)) !== null) {
-    const text = (m[1] || '').trim();
-    const href = m[2];
-    try {
-      const u = new URL(href);
-      if (hostFilter && !u.hostname.includes(hostFilter)) continue;
-      if (pathIncludes.length && !pathIncludes.some(seg => u.pathname.includes(seg))) continue;
-      const key = u.href.toLowerCase();
-      if (seen.has(key)) continue;
-      seen.add(key);
-      // skip obvious nav/noise
-      if (/^(genre|novel list|show menu)$/i.test(text)) continue;
-      results.push({ text, href: u.href });
-    } catch (_) {
-      // ignore invalid URLs
-    }
-  }
-  return results;
-}
-
-function extractNovelPagesFromMarkdown(markdown, host) {
-  const links = extractMarkdownLinks(markdown, host, []);
-  const badPaths = ['hot-novel', 'completed-novel', 'most-popular', 'latest-release-novel', 'genre', 'novel-list', 'most-popular-novel'];
-  const novelLinks = links.filter(({ href }) => {
-    try {
-      const u = new URL(href);
-      const path = u.pathname.toLowerCase();
-      if (badPaths.some(bp => path.includes(bp))) return false;
-      return /\.html$/.test(path);
-    } catch (_) { return false; }
-  });
-  return novelLinks;
-}
-
-// Web scraping functions
+// Enhanced WebNovel scraper that works with Jina proxy markdown
 async function scrapeWebnovel(query) {
   console.log(`[scrapeWebnovel] Searching for: ${query}`);
+  const searchUrl = `https://www.webnovel.com/search?keywords=${encodeURIComponent(query)}`;
   try {
-  // ...existing code...
-    const $ = cheerio.load(data);
+    const { data, viaJina } = await fetchWithFallback(searchUrl);
     const books = [];
-    $('.search-result .book-item').each((_, el) => {
-      const title = $(el).find('.book-title').text().trim();
-      const link = 'https://www.webnovel.com' + $(el).find('a').attr('href');
-      const author = $(el).find('.author').text().trim();
-      const cover = $(el).find('img').attr('src');
-      if (title && link) books.push({ title, link, author, cover, source: 'webnovel' });
-    });
-    if (books.length === 0) {
-      console.error('[scrapeWebnovel] Selector failure: .search-result .book-item, HTML:', data?.slice(0, 1000));
+    
+    if (viaJina) {
+      // Parse Jina markdown format
+      const lines = data.split('\n');
+      
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        
+        // Look for book links in markdown format
+        const linkMatch = line.match(/\[([^\]]+)\]\((https:\/\/www\.webnovel\.com\/book\/[^)]+)\)/);
+        if (linkMatch) {
+          const title = linkMatch[1].replace(/\*\*/g, '').trim();
+          const link = linkMatch[2];
+          
+          if (title && link && !title.match(/^(URBAN|ACTION|ADVENTURE|SYSTEM|WEAKTOSTRONG|VIDEOGAME)$/)) {
+            books.push({
+              title,
+              link,
+              author: '',
+              cover: '',
+              source: 'webnovel'
+            });
+          }
+        }
+      }
+    } else {
+      // Parse HTML content
+      const $ = cheerio.load(data);
+      $('.search_result_list li, .book-item, .novel-item').each((_, el) => {
+        const $el = $(el);
+        const titleEl = $el.find('.book-title a, .title a, h3 a, .name a').first();
+        const title = titleEl.text().trim() || titleEl.attr('title') || '';
+        const link = titleEl.attr('href');
+        const author = $el.find('.author, .writer, .book-author').text().trim().replace('by', '').trim();
+        const cover = $el.find('img').attr('src') || $el.find('img').attr('data-src') || '';
+        
+        if (title && link) {
+          const fullLink = link.startsWith('http') ? link : `https://www.webnovel.com${link}`;
+          books.push({ title, link: fullLink, author, cover, source: 'webnovel' });
+        }
+      });
     }
+    
+    console.log(`[scrapeWebnovel] Found ${books.length} books`);
     return books;
   } catch (err) {
     console.error(`[scrapeWebnovel] HTTP error:`, err?.message || err);
     return [];
   }
-
 }
 
-async function getBookDetails(url, source) {
+// Royal Road scraper
 async function scrapeRoyalRoad(query) {
   console.log(`[scrapeRoyalRoad] Searching for: ${query}`);
   const searchUrl = `https://www.royalroad.com/fictions/search?title=${encodeURIComponent(query)}`;
@@ -196,15 +179,19 @@ async function scrapeRoyalRoad(query) {
     const { data } = await fetchWithFallback(searchUrl);
     const $ = cheerio.load(data);
     const books = [];
+    
     $('.fiction-list .fiction-title').each((_, el) => {
-      const a = $(el).find('a');
+      const $el = $(el);
+      const a = $el.find('a');
       const title = a.text().trim();
       const link = 'https://www.royalroad.com' + a.attr('href');
-      if (title && link) books.push({ title, link, author: '', cover: '', source: 'royalroad' });
+      
+      if (title && link) {
+        books.push({ title, link, author: '', cover: '', source: 'royalroad' });
+      }
     });
-    if (books.length === 0) {
-      console.error('[scrapeRoyalRoad] Selector failure: .fiction-list .fiction-title, HTML:', data?.slice(0, 1000));
-    }
+    
+    console.log(`[scrapeRoyalRoad] Found ${books.length} books`);
     return books;
   } catch (err) {
     console.error(`[scrapeRoyalRoad] HTTP error:`, err?.message || err);
@@ -212,95 +199,75 @@ async function scrapeRoyalRoad(query) {
   }
 }
 
-async function scrapeNovelUpdates(query) {
-  console.log(`[scrapeNovelUpdates] Searching for: ${query}`);
-  const searchUrl = `https://www.novelupdates.com/series-finder/?sf=1&search=${encodeURIComponent(query)}`;
+// NovelBin scraper
+async function scrapeNovelBin(query) {
+  console.log(`[scrapeNovelBin] Searching for: ${query}`);
+  const searchUrl = `https://novelbin.com/search?keyword=${encodeURIComponent(query)}`;
   try {
     const { data } = await fetchWithFallback(searchUrl);
     const $ = cheerio.load(data);
     const books = [];
-    $('.search_main_box .search_title').each((_, el) => {
-      const a = $(el).find('a');
-      const title = a.text().trim();
-      const link = a.attr('href');
-      if (title && link) books.push({ title, link, author: '', cover: '', source: 'novelupdates' });
-    });
-    if (books.length === 0) {
-      console.error('[scrapeNovelUpdates] Selector failure: .search_main_box .search_title, HTML:', data?.slice(0, 1000));
-    }
-    return books;
-  } catch (err) {
-    console.error(`[scrapeNovelUpdates] HTTP error:`, err?.message || err);
-    return [];
-  }
-}
-
-async function scrapeWuxiaWorld(query) {
-  console.log(`[scrapeWuxiaWorld] Searching for: ${query}`);
-  const searchUrl = `https://www.wuxiaworld.com/search?searchType=novel&searchScope=novel&search=${encodeURIComponent(query)}`;
-  try {
-    const { data } = await fetchWithFallback(searchUrl);
-    const $ = cheerio.load(data);
-    const books = [];
-    $('.novel-list .novel-item').each((_, el) => {
-      const a = $(el).find('a');
-      const title = a.text().trim();
-      const link = 'https://www.wuxiaworld.com' + a.attr('href');
-      if (title && link) books.push({ title, link, author: '', cover: '', source: 'wuxiaworld' });
-    });
-    if (books.length === 0) {
-      console.error('[scrapeWuxiaWorld] Selector failure: .novel-list .novel-item, HTML:', data?.slice(0, 1000));
-    }
-    return books;
-  } catch (err) {
-    console.error(`[scrapeWuxiaWorld] HTTP error:`, err?.message || err);
-    return [];
-  }
-}
-
-async function scrapeScribbleHub(query) {
-  console.log(`[scrapeScribbleHub] Searching for: ${query}`);
-  const searchUrl = `https://www.scribblehub.com/?s=${encodeURIComponent(query)}&post_type=series`;
-  try {
-    const { data } = await fetchWithFallback(searchUrl);
-    const $ = cheerio.load(data);
-    const books = [];
-    $('.search_main_box .search_title').each((_, el) => {
-      const a = $(el).find('a');
-      const title = a.text().trim();
-      const link = a.attr('href');
-      if (title && link) books.push({ title, link, author: '', cover: '', source: 'scribblehub' });
-    });
-    if (books.length === 0) {
-      console.error('[scrapeScribbleHub] Selector failure: .search_main_box .search_title, HTML:', data?.slice(0, 1000));
-    }
-    return books;
-  } catch (err) {
-    console.error(`[scrapeScribbleHub] HTTP error:`, err?.message || err);
-    return [];
-  }
-
-
-async function getBookDetails(url, source) {
-    // If static scraping fails, try Puppeteer for dynamic scraping
-    async function puppeteerChapters(url, selectors) {
-      let browser, chapters = [];
-      try {
-        browser = await puppeteer.launch({ headless: true });
-        const page = await browser.newPage();
-        await page.setUserAgent(getRandomUserAgent());
-        await page.goto(url, { waitUntil: 'networkidle2', timeout: 20000 });
-        for (const sel of selectors) {
-          const links = await page.$$eval(sel, els => els.map(e => ({ title: e.textContent.trim(), link: e.href })));
-          chapters.push(...links.filter(l => l.title && l.link));
-        }
-      } catch (err) {
-        console.warn('Puppeteer chapter scrape failed:', err.message);
-      } finally {
-        if (browser) await browser.close();
+    
+    $('.book-item, .novel-item, .list-novel .row').each((_, el) => {
+      const $el = $(el);
+      const titleEl = $el.find('h3 a, .novel-title a, .book-name a').first();
+      const title = titleEl.text().trim();
+      const link = titleEl.attr('href');
+      const author = $el.find('.author, .book-author').text().trim().replace('Author:', '').trim();
+      const cover = $el.find('img').attr('src') || $el.find('img').attr('data-src') || '';
+      
+      if (title && link) {
+        const fullLink = link.startsWith('http') ? link : `https://novelbin.com${link}`;
+        books.push({ 
+          title, 
+          link: fullLink, 
+          author, 
+          cover: cover.startsWith('http') ? cover : (cover ? `https://novelbin.com${cover}` : ''), 
+          source: 'novelbin' 
+        });
       }
-      return chapters;
+    });
+    
+    console.log(`[scrapeNovelBin] Found ${books.length} books`);
+    return books;
+  } catch (err) {
+    console.error(`[scrapeNovelBin] HTTP error:`, err?.message || err);
+    return [];
+  }
+}
+
+// Alternative search function that tries different approaches
+async function searchAllSources(query) {
+  const sources = [
+    { name: 'webnovel', fn: scrapeWebnovel },
+    { name: 'novelbin', fn: scrapeNovelBin },
+    { name: 'royalroad', fn: scrapeRoyalRoad }
+  ];
+
+  const allResults = [];
+  const errors = {};
+
+  // Run searches sequentially to avoid overwhelming
+  for (const source of sources) {
+    try {
+      console.log(`[SEARCH] Starting ${source.name}...`);
+      const results = await source.fn(query);
+      console.log(`[SEARCH] ${source.name}: ${results.length} results`);
+      allResults.push(...results);
+    } catch (error) {
+      console.error(`[SEARCH] ${source.name} failed:`, error.message);
+      errors[source.name] = error.message;
     }
+    
+    // Small delay between sources
+    await sleep(500);
+  }
+
+  return { results: allResults, errors };
+}
+
+// Book details function
+async function getBookDetails(url, source) {
   try {
     const cacheKey = `${source}|${url}`;
     const cached = detailsCache.get(cacheKey);
@@ -309,89 +276,89 @@ async function getBookDetails(url, source) {
     }
 
     await sleep(getJitterDelay());
-    const { data, viaJina } = await fetchWithFallback(url);
+    const { data } = await fetchWithFallback(url);
     
     const $ = cheerio.load(data);
     let chapters = [];
+    let bookTitle = '';
+    let bookAuthor = '';
+    let bookDescription = '';
+    let bookCover = '';
     
+    // Extract book metadata based on source
     if (source === 'novelbin') {
-      $('.chapter-item a, .list-chapter a').each((i, element) => {
-        const title = $(element).text().trim();
-        const link = toAbsoluteUrl($(element).attr('href'), 'https://novelbin.com');
+      bookTitle = $('.book-info h1, .novel-title, .book-name').first().text().trim();
+      bookAuthor = $('.author, .book-author').first().text().trim().replace('Author:', '').trim();
+      bookDescription = $('.summary .content, .book-desc, .description').first().text().trim();
+      bookCover = $('.book-img img, .novel-cover img').attr('src') || '';
+      
+      $('.chapter-list .row, .list-chapter li').each((i, element) => {
+        const $el = $(element);
+        const titleEl = $el.find('a').first();
+        const title = titleEl.text().trim() || titleEl.attr('title') || '';
+        const link = titleEl.attr('href');
         if (title && link) {
-          chapters.push({ title, link });
+          const fullLink = link.startsWith('http') ? link : `https://novelbin.com${link}`;
+          chapters.push({ title, link: fullLink });
         }
       });
-      if (chapters.length === 0) {
-        chapters = await puppeteerChapters(url, ['.chapter-item a', '.list-chapter a']);
-      }
-    } else if (source === 'lightnovelpub') {
-      $('.chapter-list a, .table-of-contents a, .chapter-item a').each((i, element) => {
-        const title = $(element).text().trim();
-        const link = toAbsoluteUrl($(element).attr('href'), LIGHTNOVELPUB_BASE_URL);
-        if (title && link) {
-          chapters.push({ title, link });
-        }
-      });
-      if (chapters.length === 0) {
-        chapters = await puppeteerChapters(url, ['.chapter-list a', '.table-of-contents a', '.chapter-item a']);
-      }
-    } else if (source === 'novelfull') {
-      $('ul.list-chapter a, #list-chapter a, .list-chapter a, .chapter-list a').each((i, element) => {
-        const title = $(element).text().trim();
-        const link = toAbsoluteUrl($(element).attr('href'), 'https://novelfull.com');
-        if (title && link && /chapter/i.test(title)) {
-          chapters.push({ title, link });
-        }
-      });
-      if (chapters.length === 0) {
-        chapters = await puppeteerChapters(url, ['ul.list-chapter a', '#list-chapter a', '.list-chapter a', '.chapter-list a']);
-      }
-      if ((chapters.length === 0 && ENABLE_JINA_PROXY) || viaJina) {
-        const mdLinks = extractNovelPagesFromMarkdown(data, 'novelfull.com').filter(l => l.href.includes('/chapter-'));
-        mdLinks.forEach(({ text, href }) => {
-          chapters.push({ title: text, link: href });
-        });
-      }
-    } else if (source === 'readnovelfull') {
-      $('ul.list-chapter a, #list-chapter a, .list-chapter a, .chapter-list a').each((i, element) => {
-        const title = $(element).text().trim();
-        const link = toAbsoluteUrl($(element).attr('href'), 'https://readnovelfull.com');
-        if (title && link && /chapter/i.test(title)) {
-          chapters.push({ title, link });
-        }
-      });
-      if (chapters.length === 0) {
-        chapters = await puppeteerChapters(url, ['ul.list-chapter a', '#list-chapter a', '.list-chapter a', '.chapter-list a']);
-      }
-      if ((chapters.length === 0 && ENABLE_JINA_PROXY) || viaJina) {
-        const mdLinks = extractNovelPagesFromMarkdown(data, 'readnovelfull.com').filter(l => l.href.includes('/chapter-'));
-        mdLinks.forEach(({ text, href }) => {
-          chapters.push({ title: text, link: href });
-        });
-      }
     } else if (source === 'royalroad') {
-      // RoyalRoad: chapters are listed under .fiction-index .chapter-row a
-      $('.fiction-index .chapter-row a').each((i, el) => {
-        const title = $(el).text().trim();
-        const link = toAbsoluteUrl($(el).attr('href'), url);
-        if (title && link) chapters.push({ title, link });
+      bookTitle = $('.fic-title h1, .fiction-title').first().text().trim();
+      bookAuthor = $('.author .au-name, .fiction-author').first().text().trim();
+      bookDescription = $('.description .hidden-content, .fiction-info .description').first().text().trim();
+      bookCover = $('.fic-image img, .fiction-image img').attr('src') || '';
+      
+      $('#chapters .chapter-row a, .chapter-list a').each((i, element) => {
+        const title = $(element).text().trim();
+        const link = $(element).attr('href');
+        if (title && link) {
+          const fullLink = link.startsWith('http') ? link : `https://www.royalroad.com${link}`;
+          chapters.push({ title, link: fullLink });
+        }
       });
-      if (chapters.length === 0) {
-        chapters = await puppeteerChapters(url, ['.fiction-index .chapter-row a']);
-      }
+    } else {
+      // Generic extraction
+      bookTitle = $('h1, .title, .book-title').first().text().trim();
+      bookAuthor = $('.author, .book-author').first().text().trim();
+      bookDescription = $('.description, .summary, .synopsis').first().text().trim();
+      bookCover = $('.cover img, .book-cover img').attr('src') || '';
+      
+      $('a').each((i, element) => {
+        const title = $(element).text().trim();
+        const href = $(element).attr('href');
+        if (title && href && /chapter|ch\s*\d+/i.test(title)) {
+          const link = toAbsoluteUrl(href, url);
+          if (link) {
+            chapters.push({ title, link });
+          }
+        }
+      });
     }
     
-    const result = { chapters };
+    const result = { 
+      title: bookTitle || 'Unknown Title',
+      author: bookAuthor || 'Unknown Author',
+      description: bookDescription || '',
+      cover: bookCover || '',
+      chapters: chapters.slice(0, 1000)
+    };
+    
     detailsCache.set(cacheKey, { expiresAt: Date.now() + DETAILS_TTL_MS, data: result });
     return result;
   } catch (error) {
     const status = error?.response?.status;
     console.warn('Error getting book details', status ? `(status ${status})` : `(${error.message})`);
-    return { chapters: [] };
+    return { 
+      title: 'Unknown Title', 
+      author: 'Unknown Author', 
+      description: '', 
+      cover: '', 
+      chapters: [] 
+    };
   }
 }
 
+// Chapter content function
 async function getChapterContent(url, source) {
   try {
     const cacheKey = `${source}|${url}`;
@@ -406,32 +373,15 @@ async function getChapterContent(url, source) {
     const $ = cheerio.load(data);
     let content = '';
     
+    // Extract content based on source
     if (source === 'novelbin') {
       const container = $('#chr-content');
       if (container.length) {
         content = container.find('p').map((_, p) => $(p).text().trim()).get().filter(Boolean).join('\n\n');
         if (!content) content = container.text().trim();
       }
-    } else if (source === 'lightnovelpub') {
-      const container = $('.chapter-content, #chapter-container, .chapter__content').first();
-      if (container.length) {
-        content = container.find('p').map((_, p) => $(p).text().trim()).get().filter(Boolean).join('\n\n');
-        if (!content) content = container.text().trim();
-      }
-    } else if (source === 'novelfull' || source === 'readnovelfull') {
-      const container = $('#chapter-content, .chapter-content, .chapter-c');
-      if (container.length) {
-        content = container.find('p').map((_, p) => $(p).text().trim()).get().filter(Boolean).join('\n\n');
-        if (!content) content = container.text().trim();
-      }
-    } else if (source === 'novelhall') {
-      const container = $('.chapter-content, #chaptercontent');
-      if (container.length) {
-        content = container.find('p, div').map((_, p) => $(p).text().trim()).get().filter(Boolean).join('\n\n');
-        if (!content) content = container.text().trim();
-      }
-    } else if (source === 'boxnovel') {
-      const container = $('.reading-content, .text-left');
+    } else if (source === 'royalroad') {
+      const container = $('.chapter-content, .chapter-inner');
       if (container.length) {
         content = container.find('p').map((_, p) => $(p).text().trim()).get().filter(Boolean).join('\n\n');
         if (!content) content = container.text().trim();
@@ -472,29 +422,20 @@ app.get('/api/search', async (req, res) => {
     }
     
     const bypassCache = String(nocache || '').toLowerCase() === '1';
-    // Always query all enabled sources in parallel
-    const sources = [
-      { name: 'webnovel', enabled: true, fn: scrapeWebnovel },
-      { name: 'royalroad', enabled: true, fn: scrapeRoyalRoad },
-      { name: 'novelupdates', enabled: true, fn: scrapeNovelUpdates },
-      { name: 'wuxiaworld', enabled: true, fn: scrapeWuxiaWorld },
-      { name: 'scribblehub', enabled: true, fn: scrapeScribbleHub }
-    ];
-    const resultsBySource = [];
-    const errorsBySource = {};
-    await Promise.all(sources.filter(s => s.enabled).map(async (src) => {
-      try {
-        console.log(`[SCRAPE] Trying source: ${src.name}`);
-        const res = await src.fn(query);
-        console.log(`[SCRAPE] Source: ${src.name}, Results: ${res.length}`);
-        resultsBySource.push(res.map(r => ({ ...r, source: src.name })));
-      } catch (err) {
-        errorsBySource[src.name] = err?.message || 'Unknown error';
-        console.warn(`[ERROR] Search failed for ${src.name}:`, err?.message || err);
+    
+    // Check cache first
+    const cacheKey = `search|${query}`;
+    if (!bypassCache) {
+      const cached = searchCache.get(cacheKey);
+      if (cached && cached.expiresAt > Date.now()) {
+        return res.json(cached.data);
       }
-    }));
-    // Deduplicate and sort
-    const allResults = resultsBySource.flat().filter(Boolean);
+    }
+    
+    // Use the enhanced search function
+    const { results: allResults, errors } = await searchAllSources(query);
+    
+    // Deduplicate results
     const seen = new Set();
     const deduped = allResults.filter(item => {
       const key = `${item.source}|${(item.link || '').toLowerCase()}`;
@@ -502,27 +443,39 @@ app.get('/api/search', async (req, res) => {
       seen.add(key);
       return true;
     });
+    
     // Sort by source priority and title
-    const sourceOrder = ['webnovel','royalroad','novelupdates','wuxiaworld','scribblehub'];
+    const sourceOrder = ['webnovel', 'novelbin', 'royalroad'];
     deduped.sort((a, b) => {
       const sa = sourceOrder.indexOf(a.source);
       const sb = sourceOrder.indexOf(b.source);
       if (sa !== sb) return sa - sb;
       return a.title.localeCompare(b.title);
     });
+    
+    // Build message
     let message = '';
-    if (Object.keys(errorsBySource).length > 0) {
-      message += 'Some sources failed: ' + Object.entries(errorsBySource).map(([src, err]) => `${src}: ${err}`).join('; ') + '. ';
+    const successfulSources = new Set(deduped.map(book => book.source)).size;
+    const totalSources = sourceOrder.length;
+    const failedSources = Object.keys(errors);
+    
+    if (failedSources.length > 0) {
+      message += `${failedSources.length}/${totalSources} sources had issues. `;
     }
+    
     if (deduped.length === 0) {
-      message += `No books found for "${query}". Try a different search term.`;
-      return res.json({ results: [], message });
+      message += `No books found for "${query}". Try different keywords.`;
+    } else {
+      message += `Found ${deduped.length} books from ${successfulSources} sources for "${query}".`;
     }
-    message += `Found ${deduped.length} books for "${query}".`;
-    res.json({ results: deduped, message });
+    
+    const response = { results: deduped, message };
+    searchCache.set(cacheKey, { expiresAt: Date.now() + SEARCH_TTL_MS, data: response });
+    
+    res.json(response);
   } catch (error) {
     console.error('Search error:', error);
-    res.status(500).json({ error: 'Search failed' });
+    res.status(500).json({ error: 'Search failed', details: error.message });
   }
 });
 
@@ -572,9 +525,11 @@ app.get('/api/chapter/:source', async (req, res) => {
   }
 });
 
+// Health check endpoint
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'OK', timestamp: new Date().toISOString() });
+});
+
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
-
-
-

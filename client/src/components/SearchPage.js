@@ -1,13 +1,40 @@
 import React, { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import styled from 'styled-components';
 import axios from 'axios';
 import { useLibrary } from '../context/LibraryContext';
 
 const SearchContainer = styled.div`
-  max-width: 1200px;
+  max-width: 1400px;
   margin: 0 auto;
   padding: 2rem;
+  
+  @media (max-width: 768px) {
+    padding: 1rem;
+  }
+`;
+
+const SearchHeader = styled.div`
+  text-align: center;
+  margin-bottom: 3rem;
+`;
+
+const SearchTitle = styled.h1`
+  font-size: 2.5rem;
+  margin-bottom: 1rem;
+  color: var(--text-primary-light);
+  
+  .theme-dark & {
+    color: var(--text-primary-dark);
+  }
+  
+  .theme-sepia & {
+    color: var(--text-primary-sepia);
+  }
+  
+  @media (max-width: 768px) {
+    font-size: 2rem;
+  }
 `;
 
 const SearchForm = styled.form`
@@ -15,22 +42,40 @@ const SearchForm = styled.form`
   gap: 1rem;
   margin-bottom: 2rem;
   justify-content: center;
+  align-items: center;
+  
+  @media (max-width: 768px) {
+    flex-direction: column;
+    align-items: stretch;
+  }
+`;
+
+const SearchInputContainer = styled.div`
+  position: relative;
+  flex: 1;
+  max-width: 600px;
 `;
 
 const SearchInput = styled.input`
-  flex: 1;
-  max-width: 500px;
-  padding: 1rem;
+  width: 100%;
+  padding: 1.25rem 1.5rem;
+  padding-right: 3rem;
   border: 2px solid var(--border-light);
-  border-radius: 8px;
+  border-radius: 12px;
   font-size: 1.1rem;
   background-color: var(--bg-primary-light);
   color: var(--text-primary-light);
-  transition: border-color 0.3s ease;
+  transition: all 0.3s ease;
   
   &:focus {
     outline: none;
     border-color: var(--accent-light);
+    box-shadow: 0 0 0 4px rgba(0, 123, 255, 0.1);
+    transform: translateY(-1px);
+  }
+  
+  &::placeholder {
+    color: var(--text-secondary-light);
   }
   
   .theme-dark & {
@@ -40,6 +85,11 @@ const SearchInput = styled.input`
     
     &:focus {
       border-color: var(--accent-dark);
+      box-shadow: 0 0 0 4px rgba(77, 171, 247, 0.1);
+    }
+    
+    &::placeholder {
+      color: var(--text-secondary-dark);
     }
   }
   
@@ -50,58 +100,214 @@ const SearchInput = styled.input`
     
     &:focus {
       border-color: var(--accent-sepia);
+      box-shadow: 0 0 0 4px rgba(210, 105, 30, 0.1);
+    }
+    
+    &::placeholder {
+      color: var(--text-secondary-sepia);
+    }
+  }
+`;
+
+const ClearButton = styled.button`
+  position: absolute;
+  right: 1rem;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  color: var(--text-secondary-light);
+  cursor: pointer;
+  padding: 0.5rem;
+  border-radius: 4px;
+  font-size: 1.2rem;
+  transition: all 0.3s ease;
+  
+  &:hover {
+    color: var(--accent-light);
+    background-color: var(--bg-secondary-light);
+  }
+  
+  .theme-dark & {
+    color: var(--text-secondary-dark);
+    
+    &:hover {
+      color: var(--accent-dark);
+      background-color: var(--bg-secondary-dark);
+    }
+  }
+  
+  .theme-sepia & {
+    color: var(--text-secondary-sepia);
+    
+    &:hover {
+      color: var(--accent-sepia);
+      background-color: var(--bg-secondary-sepia);
     }
   }
 `;
 
 const SearchButton = styled.button`
-  padding: 1rem 2rem;
+  padding: 1.25rem 2.5rem;
   background-color: var(--accent-light);
   color: white;
   border: none;
-  border-radius: 8px;
+  border-radius: 12px;
   font-size: 1.1rem;
   cursor: pointer;
-  transition: background-color 0.3s ease;
+  transition: all 0.3s ease;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
   
-  &:hover {
+  &:hover:not(:disabled) {
     background-color: var(--accent-dark);
+    transform: translateY(-2px);
+    box-shadow: 0 4px 15px rgba(0, 123, 255, 0.3);
   }
   
   &:disabled {
     background-color: var(--text-secondary-light);
     cursor: not-allowed;
+    transform: none;
   }
   
   .theme-dark & {
     background-color: var(--accent-dark);
     
-    &:hover {
+    &:hover:not(:disabled) {
       background-color: var(--accent-light);
+      box-shadow: 0 4px 15px rgba(77, 171, 247, 0.3);
     }
   }
   
   .theme-sepia & {
     background-color: var(--accent-sepia);
     
-    &:hover {
+    &:hover:not(:disabled) {
       background-color: var(--accent-light);
+      box-shadow: 0 4px 15px rgba(210, 105, 30, 0.3);
     }
+  }
+  
+  @media (max-width: 768px) {
+    width: 100%;
+    justify-content: center;
+  }
+`;
+
+const FiltersContainer = styled.div`
+  display: flex;
+  gap: 1rem;
+  margin-bottom: 2rem;
+  flex-wrap: wrap;
+  justify-content: center;
+  
+  @media (max-width: 768px) {
+    flex-direction: column;
+  }
+`;
+
+const FilterSelect = styled.select`
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  background-color: var(--bg-secondary-light);
+  color: var(--text-primary-light);
+  cursor: pointer;
+  transition: all 0.3s ease;
+  
+  &:focus {
+    outline: none;
+    border-color: var(--accent-light);
+  }
+  
+  .theme-dark & {
+    border-color: var(--border-dark);
+    background-color: var(--bg-secondary-dark);
+    color: var(--text-primary-dark);
+    
+    &:focus {
+      border-color: var(--accent-dark);
+    }
+  }
+  
+  .theme-sepia & {
+    border-color: var(--border-sepia);
+    background-color: var(--bg-secondary-sepia);
+    color: var(--text-primary-sepia);
+    
+    &:focus {
+      border-color: var(--accent-sepia);
+    }
+  }
+`;
+
+const SearchStatus = styled.div`
+  text-align: center;
+  padding: 1rem;
+  margin-bottom: 2rem;
+  background-color: var(--bg-secondary-light);
+  border-radius: 8px;
+  color: var(--text-secondary-light);
+  
+  .theme-dark & {
+    background-color: var(--bg-secondary-dark);
+    color: var(--text-secondary-dark);
+  }
+  
+  .theme-sepia & {
+    background-color: var(--bg-secondary-sepia);
+    color: var(--text-secondary-sepia);
+  }
+`;
+
+const LoadingSpinner = styled.div`
+  display: inline-block;
+  width: 20px;
+  height: 20px;
+  border: 2px solid var(--border-light);
+  border-radius: 50%;
+  border-top-color: var(--accent-light);
+  animation: spin 1s ease-in-out infinite;
+  margin-right: 0.5rem;
+  
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+  
+  .theme-dark & {
+    border-color: var(--border-dark);
+    border-top-color: var(--accent-dark);
+  }
+  
+  .theme-sepia & {
+    border-color: var(--border-sepia);
+    border-top-color: var(--accent-sepia);
   }
 `;
 
 const ResultsContainer = styled.div`
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
   gap: 2rem;
+  
+  @media (max-width: 768px) {
+    grid-template-columns: 1fr;
+    gap: 1rem;
+  }
 `;
 
 const BookCard = styled.div`
   background-color: var(--bg-secondary-light);
   border: 1px solid var(--border-light);
-  border-radius: 12px;
+  border-radius: 16px;
   padding: 1.5rem;
+  cursor: pointer;
   transition: all 0.3s ease;
+  position: relative;
+  overflow: hidden;
   
   &:hover {
     transform: translateY(-4px);
@@ -114,6 +320,7 @@ const BookCard = styled.div`
     border-color: var(--border-dark);
     
     &:hover {
+      box-shadow: 0 8px 25px rgba(0, 0, 0, 0.3);
       border-color: var(--accent-dark);
     }
   }
@@ -123,15 +330,56 @@ const BookCard = styled.div`
     border-color: var(--border-sepia);
     
     &:hover {
+      box-shadow: 0 8px 25px rgba(92, 75, 55, 0.1);
       border-color: var(--accent-sepia);
     }
   }
+`;
+
+const BookHeader = styled.div`
+  display: flex;
+  gap: 1rem;
+  margin-bottom: 1rem;
+`;
+
+const BookCover = styled.div`
+  width: 60px;
+  height: 80px;
+  background-color: var(--accent-light);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.5rem;
+  color: white;
+  flex-shrink: 0;
+  background-image: ${props => props.cover ? `url(${props.cover})` : 'none'};
+  background-size: cover;
+  background-position: center;
+  
+  .theme-dark & {
+    background-color: var(--accent-dark);
+  }
+  
+  .theme-sepia & {
+    background-color: var(--accent-sepia);
+  }
+`;
+
+const BookInfo = styled.div`
+  flex: 1;
+  min-width: 0;
 `;
 
 const BookTitle = styled.h3`
   font-size: 1.2rem;
   margin-bottom: 0.5rem;
   color: var(--text-primary-light);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  line-height: 1.4;
   
   .theme-dark & {
     color: var(--text-primary-dark);
@@ -144,8 +392,8 @@ const BookTitle = styled.h3`
 
 const BookAuthor = styled.p`
   color: var(--text-secondary-light);
-  margin-bottom: 1rem;
-  font-style: italic;
+  margin-bottom: 0.5rem;
+  font-size: 0.9rem;
   
   .theme-dark & {
     color: var(--text-secondary-dark);
@@ -161,10 +409,10 @@ const BookSource = styled.span`
   background-color: var(--accent-light);
   color: white;
   padding: 0.25rem 0.75rem;
-  border-radius: 20px;
+  border-radius: 12px;
   font-size: 0.8rem;
   text-transform: uppercase;
-  margin-bottom: 1rem;
+  font-weight: 600;
   
   .theme-dark & {
     background-color: var(--accent-dark);
@@ -184,78 +432,93 @@ const BookActions = styled.div`
 const ActionButton = styled.button`
   flex: 1;
   padding: 0.75rem;
-  border: 1px solid var(--border-light);
-  border-radius: 6px;
-  background: none;
+  border: none;
+  border-radius: 8px;
   cursor: pointer;
-  transition: all 0.3s ease;
   font-size: 0.9rem;
+  font-weight: 500;
+  transition: all 0.3s ease;
   
-  &:hover {
+  &.primary {
     background-color: var(--accent-light);
     color: white;
-    border-color: var(--accent-light);
-  }
-  
-  .theme-dark & {
-    border-color: var(--border-dark);
     
     &:hover {
       background-color: var(--accent-dark);
-      border-color: var(--accent-dark);
+      transform: translateY(-1px);
+    }
+    
+    .theme-dark & {
+      background-color: var(--accent-dark);
+      
+      &:hover {
+        background-color: var(--accent-light);
+      }
+    }
+    
+    .theme-sepia & {
+      background-color: var(--accent-sepia);
+      
+      &:hover {
+        background-color: var(--accent-light);
+      }
     }
   }
   
-  .theme-sepia & {
-    border-color: var(--border-sepia);
+  &.secondary {
+    background-color: var(--bg-primary-light);
+    color: var(--text-primary-light);
+    border: 1px solid var(--border-light);
     
     &:hover {
-      background-color: var(--accent-sepia);
-      border-color: var(--accent-sepia);
+      background-color: var(--border-light);
+    }
+    
+    .theme-dark & {
+      background-color: var(--bg-primary-dark);
+      color: var(--text-primary-dark);
+      border-color: var(--border-dark);
+      
+      &:hover {
+        background-color: var(--border-dark);
+      }
+    }
+    
+    .theme-sepia & {
+      background-color: var(--bg-primary-sepia);
+      color: var(--text-primary-sepia);
+      border-color: var(--border-sepia);
+      
+      &:hover {
+        background-color: var(--border-sepia);
+      }
     }
   }
 `;
 
-const LibraryButton = styled.button`
-  padding: 0.75rem;
-  border: 1px solid var(--accent-light);
-  border-radius: 6px;
+const LibraryBadge = styled.div`
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
   background-color: var(--accent-light);
   color: white;
-  cursor: pointer;
-  transition: all 0.3s ease;
-  font-size: 0.9rem;
-  
-  &:hover {
-    background-color: var(--accent-dark);
-    border-color: var(--accent-dark);
-  }
+  padding: 0.25rem 0.5rem;
+  border-radius: 12px;
+  font-size: 0.7rem;
+  font-weight: 600;
   
   .theme-dark & {
-    border-color: var(--accent-dark);
     background-color: var(--accent-dark);
-    
-    &:hover {
-      background-color: var(--accent-light);
-      border-color: var(--accent-light);
-    }
   }
   
   .theme-sepia & {
-    border-color: var(--accent-sepia);
     background-color: var(--accent-sepia);
-    
-    &:hover {
-      background-color: var(--accent-light);
-      border-color: var(--accent-light);
-    }
   }
 `;
 
-const LoadingSpinner = styled.div`
+const EmptyState = styled.div`
   text-align: center;
-  padding: 2rem;
-  font-size: 1.2rem;
+  padding: 4rem 2rem;
   color: var(--text-secondary-light);
   
   .theme-dark & {
@@ -265,22 +528,37 @@ const LoadingSpinner = styled.div`
   .theme-sepia & {
     color: var(--text-secondary-sepia);
   }
+  
+  h3 {
+    font-size: 1.5rem;
+    margin-bottom: 1rem;
+    color: var(--text-primary-light);
+    
+    .theme-dark & {
+      color: var(--text-primary-dark);
+    }
+    
+    .theme-sepia & {
+      color: var(--text-primary-sepia);
+    }
+  }
+  
+  p {
+    font-size: 1.1rem;
+    margin-bottom: 2rem;
+    max-width: 500px;
+    margin-left: auto;
+    margin-right: auto;
+  }
 `;
 
-const ErrorMessage = styled.div`
-  text-align: center;
-  padding: 2rem;
-  color: #dc3545;
+const RecentSearches = styled.div`
+  margin-bottom: 2rem;
+`;
+
+const RecentSearchTitle = styled.h3`
   font-size: 1.1rem;
-`;
-
-const RecentlyReadSection = styled.div`
-  margin-bottom: 3rem;
-`;
-
-const RecentlyReadTitle = styled.h2`
-  font-size: 1.8rem;
-  margin-bottom: 1.5rem;
+  margin-bottom: 1rem;
   color: var(--text-primary-light);
   
   .theme-dark & {
@@ -292,105 +570,167 @@ const RecentlyReadTitle = styled.h2`
   }
 `;
 
-const RecentlyReadGrid = styled.div`
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
-  gap: 1.5rem;
+const RecentSearchTags = styled.div`
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  justify-content: center;
 `;
 
-const RecentlyReadCard = styled.div`
+const SearchTag = styled.button`
   background-color: var(--bg-secondary-light);
   border: 1px solid var(--border-light);
-  border-radius: 8px;
-  padding: 1rem;
+  color: var(--text-secondary-light);
+  padding: 0.5rem 1rem;
+  border-radius: 20px;
   cursor: pointer;
   transition: all 0.3s ease;
+  font-size: 0.9rem;
   
   &:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    background-color: var(--accent-light);
+    border-color: var(--accent-light);
+    color: white;
   }
   
   .theme-dark & {
     background-color: var(--bg-secondary-dark);
     border-color: var(--border-dark);
+    color: var(--text-secondary-dark);
+    
+    &:hover {
+      background-color: var(--accent-dark);
+      border-color: var(--accent-dark);
+    }
   }
   
   .theme-sepia & {
     background-color: var(--bg-secondary-sepia);
     border-color: var(--border-sepia);
-  }
-`;
-
-const RecentlyReadTitleText = styled.h3`
-  font-size: 1rem;
-  margin-bottom: 0.5rem;
-  color: var(--text-primary-light);
-  
-  .theme-dark & {
-    color: var(--text-primary-dark);
-  }
-  
-  .theme-sepia & {
-    color: var(--text-primary-sepia);
-  }
-`;
-
-const RecentlyReadSource = styled.span`
-  display: inline-block;
-  background-color: var(--accent-light);
-  color: white;
-  padding: 0.25rem 0.5rem;
-  border-radius: 12px;
-  font-size: 0.7rem;
-  text-transform: uppercase;
-  
-  .theme-dark & {
-    background-color: var(--accent-dark);
-  }
-  
-  .theme-sepia & {
-    background-color: var(--accent-sepia);
+    color: var(--text-secondary-sepia);
+    
+    &:hover {
+      background-color: var(--accent-sepia);
+      border-color: var(--accent-sepia);
+    }
   }
 `;
 
 const SearchPage = () => {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const { addBookToLibrary, savedBooks } = useLibrary();
+  
   const [query, setQuery] = useState('');
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
-  const navigate = useNavigate();
-  const { addBookToLibrary, isBookInLibrary, getRecentlyRead } = useLibrary();
+  const [sourceFilter, setSourceFilter] = useState('all');
+  const [sortBy, setSortBy] = useState('relevance');
+  const [recentSearches, setRecentSearches] = useState([]);
 
+  // Load recent searches from localStorage
   useEffect(() => {
-    const savedQ = sessionStorage.getItem('lastSearchQuery');
-    const savedR = sessionStorage.getItem('lastSearchResults');
-    if (savedQ) setQuery(savedQ);
-    if (savedR) {
-      try { setResults(JSON.parse(savedR)); } catch (_) {}
+    const saved = localStorage.getItem('readingApp_recentSearches');
+    if (saved) {
+      try {
+        setRecentSearches(JSON.parse(saved));
+      } catch (e) {
+        console.error('Error loading recent searches:', e);
+      }
     }
   }, []);
 
-  const handleSearch = async (e) => {
-    e.preventDefault();
-    if (!query.trim()) return;
+  // Handle URL query parameter
+  useEffect(() => {
+    const urlParams = new URLSearchParams(location.search);
+    const urlQuery = urlParams.get('q');
+    if (urlQuery && urlQuery !== query) {
+      setQuery(urlQuery);
+      handleSearch(null, urlQuery);
+    }
+  }, [location.search]);
 
+  const saveRecentSearch = (searchQuery) => {
+    const updated = [searchQuery, ...recentSearches.filter(s => s !== searchQuery)].slice(0, 5);
+    setRecentSearches(updated);
+    localStorage.setItem('readingApp_recentSearches', JSON.stringify(updated));
+  };
+
+  const handleSearch = async (e, searchQuery = null) => {
+    if (e) e.preventDefault();
+    
+    const searchTerm = searchQuery || query.trim();
+    if (!searchTerm) return;
+    
     setLoading(true);
     setError('');
     setMessage('');
+    saveRecentSearch(searchTerm);
+    
     try {
-      sessionStorage.setItem('lastSearchQuery', query);
-      const response = await axios.get(`/api/search?query=${encodeURIComponent(query)}`);
-      setResults(response.data.results);
+      const response = await axios.get(`/api/search?query=${encodeURIComponent(searchTerm)}`);
+      let books = response.data.results || [];
+      
+      // Apply source filter
+      if (sourceFilter !== 'all') {
+        books = books.filter(book => book.source === sourceFilter);
+      }
+      
+      // Apply sorting
+      books = sortBooks(books, sortBy);
+      
+      setResults(books);
       setMessage(response.data.message || '');
-      sessionStorage.setItem('lastSearchResults', JSON.stringify(response.data.results || []));
+      
+      // Update URL without causing a reload
+      if (!searchQuery) {
+        const newUrl = `/search?q=${encodeURIComponent(searchTerm)}`;
+        window.history.pushState({}, '', newUrl);
+      }
     } catch (err) {
-      setError('Search failed. Please try again.');
-      setMessage('');
       console.error('Search error:', err);
+      setError('Search failed. Please try again.');
+      setResults([]);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const sortBooks = (books, sortType) => {
+    const sorted = [...books];
+    
+    switch (sortType) {
+      case 'title':
+        return sorted.sort((a, b) => a.title.localeCompare(b.title));
+      case 'author':
+        return sorted.sort((a, b) => (a.author || '').localeCompare(b.author || ''));
+      case 'source':
+        return sorted.sort((a, b) => a.source.localeCompare(b.source));
+      case 'relevance':
+      default:
+        return sorted; // Keep original order for relevance
+    }
+  };
+
+  const handleFilterChange = (newSourceFilter, newSortBy) => {
+    if (newSourceFilter !== undefined) setSourceFilter(newSourceFilter);
+    if (newSortBy !== undefined) setSortBy(newSortBy);
+    
+    // Re-apply filters to current results
+    if (results.length > 0) {
+      let filteredBooks = [...results];
+      
+      const currentSource = newSourceFilter !== undefined ? newSourceFilter : sourceFilter;
+      const currentSort = newSortBy !== undefined ? newSortBy : sortBy;
+      
+      if (currentSource !== 'all') {
+        filteredBooks = filteredBooks.filter(book => book.source === currentSource);
+      }
+      
+      filteredBooks = sortBooks(filteredBooks, currentSort);
+      setResults(filteredBooks);
     }
   };
 
@@ -400,115 +740,206 @@ const SearchPage = () => {
     });
   };
 
-  const handleAddToLibrary = (book) => {
+  const handleAddToLibrary = (book, e) => {
+    e.stopPropagation();
     const success = addBookToLibrary(book);
     if (success) {
-      // You could add a toast notification here
-      console.log('Book added to library!');
+      // Show success feedback
+      setMessage(`"${book.title}" added to your library!`);
+    } else {
+      setMessage(`"${book.title}" is already in your library.`);
     }
   };
 
-  const recentlyRead = getRecentlyRead(4);
+  const isBookInLibrary = (book) => {
+    const bookId = `${book.source}-${book.link}`;
+    return savedBooks.some(savedBook => savedBook.id === bookId);
+  };
+
+  const clearSearch = () => {
+    setQuery('');
+    setResults([]);
+    setMessage('');
+    setError('');
+    window.history.pushState({}, '', '/search');
+  };
+
+  const handleRecentSearchClick = (searchTerm) => {
+    setQuery(searchTerm);
+    handleSearch(null, searchTerm);
+  };
+
+  const sources = [
+  { value: 'all', label: 'All Sources' },
+  { value: 'webnovel', label: 'WebNovel' },
+  { value: 'novelbin', label: 'NovelBin' },
+  { value: 'lightnovelpub', label: 'LightNovelPub' },
+  { value: 'novelfull', label: 'NovelFull' },
+  { value: 'royalroad', label: 'Royal Road' },
+  { value: 'novelupdates', label: 'Novel Updates' },
+  { value: 'wuxiaworld', label: 'WuxiaWorld' },
+  { value: 'scribblehub', label: 'ScribbleHub' }
+];
+
+  const sortOptions = [
+    { value: 'relevance', label: 'Relevance' },
+    { value: 'title', label: 'Title A-Z' },
+    { value: 'author', label: 'Author A-Z' },
+    { value: 'source', label: 'Source' }
+  ];
 
   return (
     <SearchContainer>
-      {recentlyRead.length > 0 && (
-        <RecentlyReadSection>
-          <RecentlyReadTitle>📚 Recently Read</RecentlyReadTitle>
-          <RecentlyReadGrid>
-            {recentlyRead.map((book) => (
-              <RecentlyReadCard key={book.id} onClick={() => handleBookClick(book)}>
-                <RecentlyReadTitleText>{book.title}</RecentlyReadTitleText>
-                <RecentlyReadSource>{book.source}</RecentlyReadSource>
-              </RecentlyReadCard>
-            ))}
-          </RecentlyReadGrid>
-        </RecentlyReadSection>
-      )}
+      <SearchHeader>
+        <SearchTitle>🔍 Discover Your Next Great Read</SearchTitle>
+        
+        {recentSearches.length > 0 && results.length === 0 && (
+          <RecentSearches>
+            <RecentSearchTitle>Recent Searches</RecentSearchTitle>
+            <RecentSearchTags>
+              {recentSearches.map((search, index) => (
+                <SearchTag
+                  key={index}
+                  onClick={() => handleRecentSearchClick(search)}
+                >
+                  {search}
+                </SearchTag>
+              ))}
+            </RecentSearchTags>
+          </RecentSearches>
+        )}
+      </SearchHeader>
 
       <SearchForm onSubmit={handleSearch}>
-        <SearchInput
-          type="text"
-          placeholder="Search for books, novels, or stories..."
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
-        <SearchButton type="submit" disabled={loading}>
+        <SearchInputContainer>
+          <SearchInput
+            type="text"
+            placeholder="Search for books, authors, or series..."
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            disabled={loading}
+          />
+          {query && (
+            <ClearButton type="button" onClick={clearSearch}>
+              ✕
+            </ClearButton>
+          )}
+        </SearchInputContainer>
+        
+        <SearchButton type="submit" disabled={loading || !query.trim()}>
+          {loading ? <LoadingSpinner /> : '🔍'}
           {loading ? 'Searching...' : 'Search'}
         </SearchButton>
       </SearchForm>
 
-      {message && !loading && (
-        <div style={{ textAlign: 'center', padding: '0.5rem', color: '#888' }}>{message}</div>
+      {(results.length > 0 || loading) && (
+        <FiltersContainer>
+          <FilterSelect 
+            value={sourceFilter}
+            onChange={(e) => handleFilterChange(e.target.value, undefined)}
+          >
+            {sources.map(source => (
+              <option key={source.value} value={source.value}>
+                📚 {source.label}
+              </option>
+            ))}
+          </FilterSelect>
+          
+          <FilterSelect 
+            value={sortBy}
+            onChange={(e) => handleFilterChange(undefined, e.target.value)}
+          >
+            {sortOptions.map(option => (
+              <option key={option.value} value={option.value}>
+                🔄 {option.label}
+              </option>
+            ))}
+          </FilterSelect>
+        </FiltersContainer>
       )}
-      {error && <ErrorMessage>{error}</ErrorMessage>}
 
       {loading && (
-        <LoadingSpinner>
-          🔍 Searching for books...
-        </LoadingSpinner>
+        <SearchStatus>
+          <LoadingSpinner />
+          Searching across multiple sources...
+        </SearchStatus>
       )}
 
-      {!loading && results.length > 0 && (() => {
-        const order = ['novelbin','novelfull','readnovelfull','lightnovelpub','novelhall','boxnovel'];
-        const grouped = results.reduce((acc, r) => {
-          const key = (r.source || 'other').toLowerCase();
-          if (!acc[key]) acc[key] = [];
-          acc[key].push(r);
-          return acc;
-        }, {});
-        const sources = Object.keys(grouped).sort((a,b) => {
-          const ia = order.indexOf(a); const ib = order.indexOf(b);
-          return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
-        });
+      {message && !loading && (
+        <SearchStatus>
+          {message}
+        </SearchStatus>
+      )}
 
-        return (
-          <div style={{ display: 'grid', gap: '2rem' }}>
-            <div style={{ textAlign: 'center', marginBottom: '1rem', color: '#888' }}>
-              Searched {sources.length} sources · {results.length} results
-            </div>
-            {sources.map((src) => (
-              <div key={src}>
-                <h2 style={{ margin: '0 0 1rem' }}>{src.toUpperCase()} · {grouped[src].length}</h2>
-                <ResultsContainer>
-                  {grouped[src]
-                    .slice()
-                    .sort((a,b) => (a.title||'').localeCompare(b.title||''))
-                    .map((book, index) => {
-                      const isInLibrary = isBookInLibrary(book);
-                      return (
-                        <BookCard key={`${book.source}-${index}`}>
-                          <div onClick={() => handleBookClick(book)} style={{ cursor: 'pointer' }}>
-                            <BookTitle>{book.title}</BookTitle>
-                            {book.author && <BookAuthor>by {book.author}</BookAuthor>}
-                            <BookSource>{book.source}</BookSource>
-                          </div>
-                          <BookActions>
-                            <ActionButton onClick={() => handleBookClick(book)}>View Details</ActionButton>
-                            {!isInLibrary ? (
-                              <LibraryButton onClick={() => handleAddToLibrary(book)}>Add to Library</LibraryButton>
-                            ) : (
-                              <ActionButton disabled style={{ opacity: 0.6 }}>In Library</ActionButton>
-                            )}
-                          </BookActions>
-                        </BookCard>
-                      );
-                    })}
-                </ResultsContainer>
-              </div>
-            ))}
-          </div>
-        );
-      })()}
+      {error && (
+        <SearchStatus style={{ backgroundColor: 'rgba(220, 53, 69, 0.1)', color: '#dc3545' }}>
+          ⚠️ {error}
+        </SearchStatus>
+      )}
 
-      {!loading && results.length === 0 && query && !error && (
-        <div style={{ textAlign: 'center', padding: '2rem' }}>
-          {message || `No books found for "${query}". Try a different search term.`}
-          <br />
-          <SearchButton type="button" onClick={handleSearch} style={{ marginTop: '1rem' }}>
-            Retry Search
-          </SearchButton>
-        </div>
+      {results.length > 0 ? (
+        <ResultsContainer>
+          {results.map((book, index) => (
+            <BookCard key={`${book.source}-${book.link}-${index}`} onClick={() => handleBookClick(book)}>
+              {isBookInLibrary(book) && (
+                <LibraryBadge>
+                  ✓ In Library
+                </LibraryBadge>
+              )}
+              
+              <BookHeader>
+                <BookCover cover={book.cover}>
+                  {!book.cover && '📖'}
+                </BookCover>
+                <BookInfo>
+                  <BookTitle>{book.title}</BookTitle>
+                  {book.author && <BookAuthor>By {book.author}</BookAuthor>}
+                  <BookSource>{book.source}</BookSource>
+                </BookInfo>
+              </BookHeader>
+              
+              <BookActions>
+                <ActionButton 
+                  className="primary"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleBookClick(book);
+                  }}
+                >
+                  📖 Read Details
+                </ActionButton>
+                <ActionButton 
+                  className="secondary"
+                  onClick={(e) => handleAddToLibrary(book, e)}
+                  disabled={isBookInLibrary(book)}
+                >
+                  {isBookInLibrary(book) ? '✓ Added' : '+ Library'}
+                </ActionButton>
+              </BookActions>
+            </BookCard>
+          ))}
+        </ResultsContainer>
+      ) : !loading && query && (
+        <EmptyState>
+          <h3>📚 No Books Found</h3>
+          <p>
+            We couldn't find any books matching "{query}". 
+            Try different keywords or check your spelling.
+          </p>
+          <ActionButton className="primary" onClick={clearSearch}>
+            🔍 Try New Search
+          </ActionButton>
+        </EmptyState>
+      )}
+
+      {!loading && !query && results.length === 0 && (
+        <EmptyState>
+          <h3>🌟 Start Your Reading Journey</h3>
+          <p>
+            Enter a book title, author name, or series to discover your next favorite read 
+            from multiple sources across the web.
+          </p>
+        </EmptyState>
       )}
     </SearchContainer>
   );
