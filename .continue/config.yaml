@@ -1,0 +1,26 @@
+name: Local Agent (Workspace)
+version: 1.0.0
+schema: v1
+
+models:
+  - name: Deepseek Coder V2 Lite (Agent)
+    provider: openai
+    model: deepseek-coder-v2-lite-instruct
+    apiBase: http://127.0.0.1:1234/v1
+    apiKey: lm-studio
+    useTools: true
+
+  - name: Deepseek Coder V2 Lite (Chat)
+    provider: openai
+    model: deepseek-coder-v2-lite-instruct
+    apiBase: http://127.0.0.1:1234/v1
+    apiKey: lm-studio
+
+context:
+  - provider: code
+  - provider: docs
+  - provider: diff
+  - provider: terminal
+  - provider: problems
+  - provider: folder
+  - provider: codebase

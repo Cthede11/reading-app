@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import styled from 'styled-components';
 import axios from 'axios';
@@ -359,8 +359,18 @@ const SearchPage = () => {
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
   const navigate = useNavigate();
   const { addBookToLibrary, isBookInLibrary, getRecentlyRead } = useLibrary();
+
+  useEffect(() => {
+    const savedQ = sessionStorage.getItem('lastSearchQuery');
+    const savedR = sessionStorage.getItem('lastSearchResults');
+    if (savedQ) setQuery(savedQ);
+    if (savedR) {
+      try { setResults(JSON.parse(savedR)); } catch (_) {}
+    }
+  }, []);
 
   const handleSearch = async (e) => {
     e.preventDefault();
@@ -368,12 +378,16 @@ const SearchPage = () => {
 
     setLoading(true);
     setError('');
-    
+    setMessage('');
     try {
+      sessionStorage.setItem('lastSearchQuery', query);
       const response = await axios.get(`/api/search?query=${encodeURIComponent(query)}`);
       setResults(response.data.results);
+      setMessage(response.data.message || '');
+      sessionStorage.setItem('lastSearchResults', JSON.stringify(response.data.results || []));
     } catch (err) {
       setError('Search failed. Please try again.');
+      setMessage('');
       console.error('Search error:', err);
     } finally {
       setLoading(false);
@@ -424,6 +438,9 @@ const SearchPage = () => {
         </SearchButton>
       </SearchForm>
 
+      {message && !loading && (
+        <div style={{ textAlign: 'center', padding: '0.5rem', color: '#888' }}>{message}</div>
+      )}
       {error && <ErrorMessage>{error}</ErrorMessage>}
 
       {loading && (
@@ -432,41 +449,65 @@ const SearchPage = () => {
         </LoadingSpinner>
       )}
 
-              {!loading && results.length > 0 && (
-          <ResultsContainer>
-            {results.map((book, index) => {
-              const isInLibrary = isBookInLibrary(book);
-              return (
-                <BookCard key={`${book.source}-${index}`}>
-                  <div onClick={() => handleBookClick(book)} style={{ cursor: 'pointer' }}>
-                    <BookTitle>{book.title}</BookTitle>
-                    {book.author && <BookAuthor>by {book.author}</BookAuthor>}
-                    <BookSource>{book.source}</BookSource>
-                  </div>
-                  
-                  <BookActions>
-                    <ActionButton onClick={() => handleBookClick(book)}>
-                      View Details
-                    </ActionButton>
-                    {!isInLibrary ? (
-                      <LibraryButton onClick={() => handleAddToLibrary(book)}>
-                        Add to Library
-                      </LibraryButton>
-                    ) : (
-                      <ActionButton disabled style={{ opacity: 0.6 }}>
-                        In Library
-                      </ActionButton>
-                    )}
-                  </BookActions>
-                </BookCard>
-              );
-            })}
-          </ResultsContainer>
-        )}
+      {!loading && results.length > 0 && (() => {
+        const order = ['novelbin','novelfull','readnovelfull','lightnovelpub','novelhall','boxnovel'];
+        const grouped = results.reduce((acc, r) => {
+          const key = (r.source || 'other').toLowerCase();
+          if (!acc[key]) acc[key] = [];
+          acc[key].push(r);
+          return acc;
+        }, {});
+        const sources = Object.keys(grouped).sort((a,b) => {
+          const ia = order.indexOf(a); const ib = order.indexOf(b);
+          return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
+        });
+
+        return (
+          <div style={{ display: 'grid', gap: '2rem' }}>
+            <div style={{ textAlign: 'center', marginBottom: '1rem', color: '#888' }}>
+              Searched {sources.length} sources · {results.length} results
+            </div>
+            {sources.map((src) => (
+              <div key={src}>
+                <h2 style={{ margin: '0 0 1rem' }}>{src.toUpperCase()} · {grouped[src].length}</h2>
+                <ResultsContainer>
+                  {grouped[src]
+                    .slice()
+                    .sort((a,b) => (a.title||'').localeCompare(b.title||''))
+                    .map((book, index) => {
+                      const isInLibrary = isBookInLibrary(book);
+                      return (
+                        <BookCard key={`${book.source}-${index}`}>
+                          <div onClick={() => handleBookClick(book)} style={{ cursor: 'pointer' }}>
+                            <BookTitle>{book.title}</BookTitle>
+                            {book.author && <BookAuthor>by {book.author}</BookAuthor>}
+                            <BookSource>{book.source}</BookSource>
+                          </div>
+                          <BookActions>
+                            <ActionButton onClick={() => handleBookClick(book)}>View Details</ActionButton>
+                            {!isInLibrary ? (
+                              <LibraryButton onClick={() => handleAddToLibrary(book)}>Add to Library</LibraryButton>
+                            ) : (
+                              <ActionButton disabled style={{ opacity: 0.6 }}>In Library</ActionButton>
+                            )}
+                          </BookActions>
+                        </BookCard>
+                      );
+                    })}
+                </ResultsContainer>
+              </div>
+            ))}
+          </div>
+        );
+      })()}
 
       {!loading && results.length === 0 && query && !error && (
         <div style={{ textAlign: 'center', padding: '2rem' }}>
-          No books found for "{query}". Try a different search term.
+          {message || `No books found for "${query}". Try a different search term.`}
+          <br />
+          <SearchButton type="button" onClick={handleSearch} style={{ marginTop: '1rem' }}>
+            Retry Search
+          </SearchButton>
         </div>
       )}
     </SearchContainer>

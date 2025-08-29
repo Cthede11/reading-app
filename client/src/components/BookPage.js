@@ -360,7 +360,12 @@ const BookPage = () => {
   };
 
   const handleBackClick = () => {
-    navigate('/');
+    if (window.history.length > 1) {
+      navigate(-1);
+    } else {
+      const last = sessionStorage.getItem('lastSearchQuery') || '';
+      navigate('/', { state: { q: last } });
+    }
   };
 
   const handleAddToLibrary = () => {
