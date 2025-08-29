@@ -311,12 +311,12 @@ const LibraryPage = () => {
     readingProgress, 
     removeBookFromLibrary, 
     getBookProgress,
-    getLibraryStats 
+      getReadingStats 
   } = useLibrary();
   const navigate = useNavigate();
   const [filter, setFilter] = useState('all'); // all, reading, completed
 
-  const stats = getLibraryStats();
+    const stats = getReadingStats();
 
   const handleContinueReading = (book) => {
     const progress = getBookProgress(book.id);

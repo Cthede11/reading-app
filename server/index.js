@@ -200,6 +200,136 @@ async function scrapeRoyalRoad(query) {
 }
 
 // NovelBin scraper
+// NovelUpdates scraper
+async function scrapeNovelUpdates(query) {
+  console.log(`[scrapeNovelUpdates] Searching for: ${query}`);
+  const searchUrl = `https://www.novelupdates.com/?s=${encodeURIComponent(query)}&post_type=seriesplans`;
+  try {
+    const { data } = await fetchWithFallback(searchUrl);
+    const $ = cheerio.load(data);
+    const books = [];
+    $('.search_main_box .search_title').each((_, el) => {
+      const $el = $(el);
+      const a = $el.find('a').first();
+      const title = a.text().trim();
+      const link = a.attr('href');
+      if (title && link) {
+        books.push({ title, link, author: '', cover: '', source: 'novelupdates' });
+      }
+    });
+    console.log(`[scrapeNovelUpdates] Found ${books.length} books`);
+    return books;
+  } catch (err) {
+    console.error(`[scrapeNovelUpdates] HTTP error:`, err?.message || err);
+    return [];
+  }
+}
+
+// WuxiaWorld scraper
+async function scrapeWuxiaWorld(query) {
+  console.log(`[scrapeWuxiaWorld] Searching for: ${query}`);
+  const searchUrl = `https://www.wuxiaworld.com/search?query=${encodeURIComponent(query)}`;
+  try {
+    const { data } = await fetchWithFallback(searchUrl);
+    const $ = cheerio.load(data);
+    const books = [];
+    $('.novel-item').each((_, el) => {
+      const $el = $(el);
+      const a = $el.find('.novel-title a').first();
+      const title = a.text().trim();
+      const link = a.attr('href');
+      const author = $el.find('.novel-author').text().trim();
+      const cover = $el.find('img').attr('src') || '';
+      if (title && link) {
+        books.push({ title, link: `https://www.wuxiaworld.com${link}`, author, cover, source: 'wuxiaworld' });
+      }
+    });
+    console.log(`[scrapeWuxiaWorld] Found ${books.length} books`);
+    return books;
+  } catch (err) {
+    console.error(`[scrapeWuxiaWorld] HTTP error:`, err?.message || err);
+    return [];
+  }
+}
+
+// ScribbleHub scraper
+async function scrapeScribbleHub(query) {
+  console.log(`[scrapeScribbleHub] Searching for: ${query}`);
+  const searchUrl = `https://www.scribblehub.com/?s=${encodeURIComponent(query)}&post_type=fictionposts`;
+  try {
+    const { data } = await fetchWithFallback(searchUrl);
+    const $ = cheerio.load(data);
+    const books = [];
+    $('.search_main_box .search_title').each((_, el) => {
+      const $el = $(el);
+      const a = $el.find('a').first();
+      const title = a.text().trim();
+      const link = a.attr('href');
+      if (title && link) {
+        books.push({ title, link, author: '', cover: '', source: 'scribblehub' });
+      }
+    });
+    console.log(`[scrapeScribbleHub] Found ${books.length} books`);
+    return books;
+  } catch (err) {
+    console.error(`[scrapeScribbleHub] HTTP error:`, err?.message || err);
+    return [];
+  }
+}
+
+// LightNovelPub scraper
+async function scrapeLightNovelPub(query) {
+  console.log(`[scrapeLightNovelPub] Searching for: ${query}`);
+  const searchUrl = `https://www.lightnovelpub.com/search?keyword=${encodeURIComponent(query)}`;
+  try {
+    const { data } = await fetchWithFallback(searchUrl);
+    const $ = cheerio.load(data);
+    const books = [];
+    $('.novel-item').each((_, el) => {
+      const $el = $(el);
+      const a = $el.find('.novel-title a').first();
+      const title = a.text().trim();
+      const link = a.attr('href');
+      const author = $el.find('.novel-author').text().trim();
+      const cover = $el.find('img').attr('src') || '';
+      if (title && link) {
+        books.push({ title, link: `https://www.lightnovelpub.com${link}`, author, cover, source: 'lightnovelpub' });
+      }
+    });
+    console.log(`[scrapeLightNovelPub] Found ${books.length} books`);
+    return books;
+  } catch (err) {
+    console.error(`[scrapeLightNovelPub] HTTP error:`, err?.message || err);
+    return [];
+  }
+}
+
+// NovelFull scraper
+async function scrapeNovelFull(query) {
+  console.log(`[scrapeNovelFull] Searching for: ${query}`);
+  const searchUrl = `https://novelfull.com/search?keyword=${encodeURIComponent(query)}`;
+  try {
+    const { data } = await fetchWithFallback(searchUrl);
+    const $ = cheerio.load(data);
+    const books = [];
+    $('.novel-item').each((_, el) => {
+      const $el = $(el);
+      const a = $el.find('.novel-title a').first();
+      const title = a.text().trim();
+      const link = a.attr('href');
+      const author = $el.find('.novel-author').text().trim();
+      const cover = $el.find('img').attr('src') || '';
+      if (title && link) {
+        books.push({ title, link: `https://novelfull.com${link}`, author, cover, source: 'novelfull' });
+      }
+    });
+    console.log(`[scrapeNovelFull] Found ${books.length} books`);
+    return books;
+  } catch (err) {
+    console.error(`[scrapeNovelFull] HTTP error:`, err?.message || err);
+    return [];
+  }
+}
 async function scrapeNovelBin(query) {
   console.log(`[scrapeNovelBin] Searching for: ${query}`);
   const searchUrl = `https://novelbin.com/search?keyword=${encodeURIComponent(query)}`;
@@ -241,7 +371,12 @@ async function searchAllSources(query) {
   const sources = [
     { name: 'webnovel', fn: scrapeWebnovel },
     { name: 'novelbin', fn: scrapeNovelBin },
-    { name: 'royalroad', fn: scrapeRoyalRoad }
+    { name: 'royalroad', fn: scrapeRoyalRoad },
+    { name: 'novelupdates', fn: scrapeNovelUpdates },
+    { name: 'wuxiaworld', fn: scrapeWuxiaWorld },
+    { name: 'scribblehub', fn: scrapeScribbleHub },
+    { name: 'lightnovelpub', fn: scrapeLightNovelPub },
+    { name: 'novelfull', fn: scrapeNovelFull }
   ];
 
   const allResults = [];
@@ -258,12 +393,46 @@ async function searchAllSources(query) {
       console.error(`[SEARCH] ${source.name} failed:`, error.message);
       errors[source.name] = error.message;
     }
-    
-    // Small delay between sources
     await sleep(500);
   }
 
-  return { results: allResults, errors };
+  // Deduplicate by title+link
+  const deduped = [];
+  const seen = new Set();
+  for (const book of allResults) {
+    const key = `${book.title}|${book.link}`;
+    if (!seen.has(key)) {
+      deduped.push(book);
+      seen.add(key);
+    }
+  }
+
+  // Sort by source order, then title
+  const sourceOrder = ['webnovel', 'novelbin', 'royalroad', 'novelupdates', 'wuxiaworld', 'scribblehub', 'lightnovelpub', 'novelfull'];
+  deduped.sort((a, b) => {
+    const sa = sourceOrder.indexOf(a.source);
+    const sb = sourceOrder.indexOf(b.source);
+    if (sa !== sb) return sa - sb;
+    return a.title.localeCompare(b.title);
+  });
+
+  // Build message
+  let message = '';
+  const successfulSources = new Set(deduped.map(book => book.source)).size;
+  const totalSources = sourceOrder.length;
+  const failedSources = Object.keys(errors);
+
+  if (failedSources.length > 0) {
+    message += `${failedSources.length}/${totalSources} sources had issues. `;
+  }
+
+  if (deduped.length === 0) {
+    message += `No books found for "${query}". Try different keywords.`;
+  } else {
+    message += `Found ${deduped.length} books from ${successfulSources} sources for "${query}".`;
+  }
+
+  return { results: deduped, message };
 }
 
 // Book details function
@@ -291,7 +460,6 @@ async function getBookDetails(url, source) {
       bookAuthor = $('.author, .book-author').first().text().trim().replace('Author:', '').trim();
       bookDescription = $('.summary .content, .book-desc, .description').first().text().trim();
       bookCover = $('.book-img img, .novel-cover img').attr('src') || '';
-      
       $('.chapter-list .row, .list-chapter li').each((i, element) => {
         const $el = $(element);
         const titleEl = $el.find('a').first();
@@ -307,7 +475,6 @@ async function getBookDetails(url, source) {
       bookAuthor = $('.author .au-name, .fiction-author').first().text().trim();
       bookDescription = $('.description .hidden-content, .fiction-info .description').first().text().trim();
       bookCover = $('.fic-image img, .fiction-image img').attr('src') || '';
-      
       $('#chapters .chapter-row a, .chapter-list a').each((i, element) => {
         const title = $(element).text().trim();
         const link = $(element).attr('href');
@@ -316,13 +483,62 @@ async function getBookDetails(url, source) {
           chapters.push({ title, link: fullLink });
         }
       });
+    } else if (source === 'novelupdates') {
+      bookTitle = $('.seriestitle').first().text().trim();
+      bookAuthor = $('.author').first().text().trim();
+      bookDescription = $('.seriesdescription').first().text().trim();
+      bookCover = $('.seriesimg img').attr('src') || '';
+      $('.chapterlist a').each((i, el) => {
+        const title = $(el).text().trim();
+        const link = $(el).attr('href');
+        if (title && link) chapters.push({ title, link });
+      });
+    } else if (source === 'wuxiaworld') {
+      bookTitle = $('.novel-title').first().text().trim();
+      bookAuthor = $('.novel-author').first().text().trim();
+      bookDescription = $('.novel-synopsis').first().text().trim();
+      bookCover = $('.novel-cover img').attr('src') || '';
+      $('.chapter-list a').each((i, el) => {
+        const title = $(el).text().trim();
+        const link = $(el).attr('href');
+        if (title && link) chapters.push({ title, link });
+      });
+    } else if (source === 'scribblehub') {
+      bookTitle = $('.fic_title').first().text().trim();
+      bookAuthor = $('.fic_author').first().text().trim();
+      bookDescription = $('.fic_desc').first().text().trim();
+      bookCover = $('.fic_image img').attr('src') || '';
+      $('.chapterlist a').each((i, el) => {
+        const title = $(el).text().trim();
+        const link = $(el).attr('href');
+        if (title && link) chapters.push({ title, link });
+      });
+    } else if (source === 'lightnovelpub') {
+      bookTitle = $('.novel-title').first().text().trim();
+      bookAuthor = $('.novel-author').first().text().trim();
+      bookDescription = $('.summary').first().text().trim();
+      bookCover = $('.novel-cover img').attr('src') || '';
+      $('.chapter-list a').each((i, el) => {
+        const title = $(el).text().trim();
+        const link = $(el).attr('href');
+        if (title && link) chapters.push({ title, link });
+      });
+    } else if (source === 'novelfull') {
+      bookTitle = $('.novel-title').first().text().trim();
+      bookAuthor = $('.novel-author').first().text().trim();
+      bookDescription = $('.novel-summary').first().text().trim();
+      bookCover = $('.novel-cover img').attr('src') || '';
+      $('.chapter-list a').each((i, el) => {
+        const title = $(el).text().trim();
+        const link = $(el).attr('href');
+        if (title && link) chapters.push({ title, link });
+      });
     } else {
       // Generic extraction
       bookTitle = $('h1, .title, .book-title').first().text().trim();
       bookAuthor = $('.author, .book-author').first().text().trim();
       bookDescription = $('.description, .summary, .synopsis').first().text().trim();
       bookCover = $('.cover img, .book-cover img').attr('src') || '';
-      
       $('a').each((i, element) => {
         const title = $(element).text().trim();
         const href = $(element).attr('href');
@@ -414,28 +630,23 @@ async function getChapterContent(url, source) {
 
 // API Routes
 app.get('/api/search', async (req, res) => {
-  console.log(`[SEARCH] Query: ${req.query.query}`);
+  const { query, nocache } = req.query;
+  console.log(`[SEARCH] Query: ${query}`);
   try {
-    const { query, nocache } = req.query;
     if (!query) {
+      console.warn('[SEARCH] Missing query parameter');
       return res.status(400).json({ error: 'Query parameter is required' });
     }
-    
     const bypassCache = String(nocache || '').toLowerCase() === '1';
-    
-    // Check cache first
     const cacheKey = `search|${query}`;
     if (!bypassCache) {
       const cached = searchCache.get(cacheKey);
       if (cached && cached.expiresAt > Date.now()) {
+        console.log('[SEARCH] Returning cached results');
         return res.json(cached.data);
       }
     }
-    
-    // Use the enhanced search function
-    const { results: allResults, errors } = await searchAllSources(query);
-    
-    // Deduplicate results
+  const { results: allResults, errors = {} } = await searchAllSources(query);
     const seen = new Set();
     const deduped = allResults.filter(item => {
       const key = `${item.source}|${(item.link || '').toLowerCase()}`;
@@ -443,38 +654,30 @@ app.get('/api/search', async (req, res) => {
       seen.add(key);
       return true;
     });
-    
-    // Sort by source priority and title
-    const sourceOrder = ['webnovel', 'novelbin', 'royalroad'];
+    const sourceOrder = ['webnovel', 'novelbin', 'royalroad', 'novelupdates', 'wuxiaworld', 'scribblehub', 'lightnovelpub', 'novelfull'];
     deduped.sort((a, b) => {
       const sa = sourceOrder.indexOf(a.source);
       const sb = sourceOrder.indexOf(b.source);
       if (sa !== sb) return sa - sb;
       return a.title.localeCompare(b.title);
     });
-    
-    // Build message
     let message = '';
     const successfulSources = new Set(deduped.map(book => book.source)).size;
     const totalSources = sourceOrder.length;
     const failedSources = Object.keys(errors);
-    
     if (failedSources.length > 0) {
       message += `${failedSources.length}/${totalSources} sources had issues. `;
     }
-    
     if (deduped.length === 0) {
       message += `No books found for "${query}". Try different keywords.`;
     } else {
       message += `Found ${deduped.length} books from ${successfulSources} sources for "${query}".`;
     }
-    
     const response = { results: deduped, message };
     searchCache.set(cacheKey, { expiresAt: Date.now() + SEARCH_TTL_MS, data: response });
-    
     res.json(response);
   } catch (error) {
-    console.error('Search error:', error);
+    console.error('[SEARCH] Error:', error);
     res.status(500).json({ error: 'Search failed', details: error.message });
   }
 });
@@ -492,36 +695,41 @@ app.post('/api/cache/clear', (req, res) => {
 });
 
 app.get('/api/book/:source', async (req, res) => {
+  const { source } = req.params;
+  const { url } = req.query;
+  console.log(`[BOOK DETAILS] Request: source=${source}, url=${url}`);
   try {
-    const { source } = req.params;
-    const { url } = req.query;
-    
     if (!url) {
+      console.warn('[BOOK DETAILS] Missing url parameter');
       return res.status(400).json({ error: 'URL parameter is required' });
     }
-    
     const bookDetails = await getBookDetails(url, source);
+    if (!bookDetails || !bookDetails.title) {
+      console.warn('[BOOK DETAILS] No details found');
+    }
     res.json(bookDetails);
   } catch (error) {
-    console.error('Book details error:', error);
-    res.status(500).json({ error: 'Failed to get book details' });
+    console.error('[BOOK DETAILS] Error:', error);
+    res.status(500).json({ error: 'Failed to get book details', details: error.message });
   }
 });
 
 app.get('/api/chapter/:source', async (req, res) => {
+  const { source } = req.params;
+  const { url } = req.query;
   try {
-    const { source } = req.params;
-    const { url } = req.query;
-    
     if (!url) {
+      console.warn('[CHAPTER] Missing url parameter');
       return res.status(400).json({ error: 'URL parameter is required' });
     }
-    
     const chapterContent = await getChapterContent(url, source);
+    if (!chapterContent || !chapterContent.content) {
+      console.warn('[CHAPTER] No content found');
+    }
     res.json(chapterContent);
   } catch (error) {
-    console.error('Chapter content error:', error);
-    res.status(500).json({ error: 'Failed to get chapter content' });
+    console.error('[CHAPTER] Error:', error);
+    res.status(500).json({ error: 'Failed to get chapter content', details: error.message });
   }
 });
 

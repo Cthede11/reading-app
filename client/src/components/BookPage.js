@@ -605,23 +605,23 @@ const BookPage = () => {
   const [bookProgress, setBookProgress] = useState(null);
 
   useEffect(() => {
-    if (book && bookUrl) {
+    if (bookUrl) {
       // Check if book is in library
       const bookId = `${source}-${bookUrl}`;
       const libraryBook = savedBooks.find(b => b.id === bookId);
       setIsInLibrary(!!libraryBook);
-      
       if (libraryBook) {
         setBook(libraryBook);
         setBookProgress(getBookProgress(bookId));
       }
-
       fetchBookDetails();
     } else {
       setError('Book information not found');
       setLoading(false);
     }
-  }, [book, bookUrl, source, savedBooks]);
+    // Only run when bookUrl or source changes
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bookUrl, source, savedBooks]);
 
   const fetchBookDetails = async () => {
     try {
