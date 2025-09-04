@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useLocation, useNavigate } from 'react-router-dom';
 import styled from 'styled-components';
 import axios from 'axios';
@@ -604,17 +604,27 @@ const BookPage = () => {
   const [chapterSearch, setChapterSearch] = useState('');
   const [isInLibrary, setIsInLibrary] = useState(false);
   const [bookProgress, setBookProgress] = useState(null);
+  
+  // Use ref to track request state to prevent concurrent requests
+  const requestInProgress = useRef(false);
+  const abortController = useRef(null);
 
+  // Initialize request state on component mount
   useEffect(() => {
+    requestInProgress.current = false;
+    abortController.current = null;
+  }, []);
+
+  // Effect to fetch book details - only runs when bookUrl or source changes
+  useEffect(() => {
+    // Reset request state when navigating to a new book
+    requestInProgress.current = false;
+    if (abortController.current) {
+      abortController.current.abort();
+      abortController.current = null;
+    }
+    
     if (bookUrl) {
-      // Check if book is in library
-      const bookId = `${source}-${bookUrl}`;
-      const libraryBook = savedBooks.find(b => b.id === bookId);
-      setIsInLibrary(!!libraryBook);
-      if (libraryBook) {
-        setBook(libraryBook);
-        setBookProgress(getBookProgress(bookId));
-      }
       fetchBookDetails();
     } else {
       setError('Book information not found');
@@ -622,14 +632,58 @@ const BookPage = () => {
     }
     // Only run when bookUrl or source changes
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bookUrl, source, savedBooks]);
+  }, [bookUrl, source]);
 
-  const fetchBookDetails = async () => {
+  // Effect to check library status - runs when savedBooks changes
+  useEffect(() => {
+    if (bookUrl) {
+      const bookId = `${source}-${bookUrl}`;
+      const libraryBook = savedBooks.find(b => b.id === bookId);
+      setIsInLibrary(!!libraryBook);
+      if (libraryBook) {
+        setBook(prevBook => ({
+          ...prevBook,
+          ...libraryBook
+        }));
+        setBookProgress(getBookProgress(bookId));
+      }
+    }
+  }, [savedBooks, bookUrl, source, getBookProgress]);
+
+  // Cleanup effect to abort pending requests
+  useEffect(() => {
+    return () => {
+      if (abortController.current) {
+        abortController.current.abort();
+      }
+    };
+  }, []);
+
+  const fetchBookDetails = async (retryCount = 0) => {
+    // Prevent multiple concurrent requests
+    if (requestInProgress.current) {
+      console.log('Request already in progress, skipping...');
+      return;
+    }
+    
     try {
+      requestInProgress.current = true;
       setLoading(true);
       setError('');
       
-      const response = await axios.get(`/api/book/${source}?url=${encodeURIComponent(bookUrl)}`);
+      // Create abort controller for this request
+      abortController.current = new AbortController();
+      
+      // Add cache-busting parameter to avoid cached 500 responses
+      const cacheBuster = `&_t=${Date.now()}`;
+      const response = await axios.get(`http://localhost:5000/api/book/${source}?url=${encodeURIComponent(bookUrl)}${cacheBuster}`, {
+        timeout: 15000, // 15 second timeout (reduced from 30s)
+        signal: abortController.current.signal,
+        headers: {
+          'Cache-Control': 'no-cache',
+          'Pragma': 'no-cache'
+        }
+      });
       const bookDetails = response.data;
       
       setChapters(bookDetails.chapters || []);
@@ -654,10 +708,95 @@ const BookPage = () => {
         }
       }
     } catch (err) {
+      // Don't handle errors if request was aborted
+      if (err.name === 'AbortError' || err.code === 'ERR_CANCELED') {
+        console.log('Request was aborted');
+        return;
+      }
+      
       console.error('Error fetching book details:', err);
-      setError('Failed to load book details. Please try again.');
+      
+      // Handle timeout errors
+      if (err.code === 'ECONNABORTED' || err.message.includes('timeout')) {
+        if (retryCount < 1) {
+          console.log(`Request timed out, retrying (attempt ${retryCount + 1}/2)...`);
+          setTimeout(() => {
+            requestInProgress.current = false;
+            fetchBookDetails(retryCount + 1);
+          }, 3000); // Wait 3 seconds before retry
+          return;
+        }
+        // Try fallback search on timeout
+        console.log('Request timed out, trying fallback search...');
+        tryFallbackSearch();
+        return;
+      }
+      
+      // Retry logic for 500 errors
+      if (err.response?.status === 500 && retryCount < 2) {
+        console.log(`Retrying request (attempt ${retryCount + 1}/3)...`);
+        setTimeout(() => {
+          requestInProgress.current = false;
+          fetchBookDetails(retryCount + 1);
+        }, 2000 * (retryCount + 1)); // Exponential backoff: 2s, 4s
+        return;
+      }
+      
+      // Check if it's a rate limiting error
+      if (err.response?.data?.details?.includes('Failed to fetch') && err.response?.data?.details?.includes('after 3 attempts')) {
+        // Try to get book details through search as a fallback
+        if (retryCount === 0) {
+          console.log('Trying fallback: search for book details...');
+          tryFallbackSearch();
+          return;
+        }
+        setError('The website is temporarily blocking requests. Please try again in a few minutes or use the search feature to find the book.');
+      } else if (err.code === 'ECONNABORTED' || err.message.includes('timeout')) {
+        setError('Request timed out. The website may be slow or blocking requests. Please try again later or use the search feature.');
+      } else {
+        setError('Failed to load book details. Please try again.');
+      }
     } finally {
       setLoading(false);
+      requestInProgress.current = false;
+      abortController.current = null;
+    }
+  };
+
+  const tryFallbackSearch = async () => {
+    try {
+      console.log('Attempting fallback search for book details...');
+      const searchQuery = book?.title || 'timeless assassin'; // Use book title or fallback
+      const response = await axios.get(`http://localhost:5000/api/search?query=${encodeURIComponent(searchQuery)}`);
+      const searchResults = response.data.results || [];
+      
+      // Find a matching book in search results
+      const matchingBook = searchResults.find(result => 
+        result.source === source && 
+        result.link === bookUrl
+      );
+      
+      if (matchingBook) {
+        console.log('Found matching book in search results, using as fallback');
+        // Use the search result as book details
+        const fallbackBook = {
+          ...book,
+          title: matchingBook.title || book?.title || 'Unknown Title',
+          author: matchingBook.author || book?.author || 'Unknown Author',
+          description: matchingBook.description || book?.description || '',
+          cover: matchingBook.cover || book?.cover || '',
+          totalChapters: 0 // We don't have chapter count from search
+        };
+        
+        setBook(fallbackBook);
+        setChapters([]); // No chapters available from search
+        setError('Book details loaded from search. Chapters are temporarily unavailable due to rate limiting. Please try again later.');
+      } else {
+        setError('The website is temporarily blocking requests. Please try again in a few minutes or use the search feature to find the book.');
+      }
+    } catch (searchErr) {
+      console.error('Fallback search also failed:', searchErr);
+      setError('The website is temporarily blocking requests. Please try again in a few minutes or use the search feature to find the book.');
     }
   };
 
@@ -730,7 +869,27 @@ const BookPage = () => {
         <BackButton onClick={handleBackClick}>
           ← Back
         </BackButton>
-        <ErrorMessage>{error}</ErrorMessage>
+        <ErrorMessage>
+          {error}
+          {error.includes('rate limiting') || error.includes('temporarily blocking') ? (
+            <div style={{ marginTop: '1rem' }}>
+              <ActionButton 
+                className="primary" 
+                onClick={() => {
+                  setError('');
+                  requestInProgress.current = false;
+                  if (abortController.current) {
+                    abortController.current.abort();
+                  }
+                  fetchBookDetails();
+                }}
+                style={{ marginTop: '1rem' }}
+              >
+                🔄 Try Again
+              </ActionButton>
+            </div>
+          ) : null}
+        </ErrorMessage>
       </BookContainer>
     );
   }

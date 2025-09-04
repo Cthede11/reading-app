@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import styled from 'styled-components';
 import axios from 'axios';
@@ -629,6 +629,10 @@ const SearchPage = () => {
   const [sourceFilter, setSourceFilter] = useState('all');
   const [sortBy, setSortBy] = useState('relevance');
   const [recentSearches, setRecentSearches] = useState([]);
+  
+  // Use ref to track request state to prevent concurrent requests
+  const requestInProgress = useRef(false);
+  const abortController = useRef(null);
 
   // Load recent searches from localStorage
   useEffect(() => {
@@ -652,7 +656,16 @@ const SearchPage = () => {
     }
   }, [location.search]);
 
-  const saveRecentSearch = (searchQuery) => {
+  // Cleanup effect to abort pending requests
+  useEffect(() => {
+    return () => {
+      if (abortController.current) {
+        abortController.current.abort();
+      }
+    };
+  }, []);
+
+const saveRecentSearch =  (searchQuery) => {
     const updated = [searchQuery, ...recentSearches.filter(s => s !== searchQuery)].slice(0, 5);
     setRecentSearches(updated);
     localStorage.setItem('readingApp_recentSearches', JSON.stringify(updated));
@@ -664,13 +677,30 @@ const SearchPage = () => {
     const searchTerm = searchQuery || query.trim();
     if (!searchTerm) return;
     
-    setLoading(true);
-    setError('');
-    setMessage('');
-    saveRecentSearch(searchTerm);
+    // Prevent multiple concurrent requests
+    if (requestInProgress.current) {
+      console.log('Search request already in progress, skipping...');
+      return;
+    }
     
     try {
-      const response = await axios.get(`/api/search?query=${encodeURIComponent(searchTerm)}`);
+      requestInProgress.current = true;
+      setLoading(true);
+      setError('');
+      setMessage('');
+      saveRecentSearch(searchTerm);
+      
+      // Create abort controller for this request
+      abortController.current = new AbortController();
+      
+      const response = await axios.get(`http://localhost:5000/api/search?query=${encodeURIComponent(searchTerm)}`, {
+        signal: abortController.current.signal,
+        timeout: 15000,
+        headers: {
+          'Cache-Control': 'no-cache',
+          'Pragma': 'no-cache'
+        }
+      });
       let books = response.data.results || [];
       
       // Apply source filter
@@ -690,11 +720,19 @@ const SearchPage = () => {
         window.history.pushState({}, '', newUrl);
       }
     } catch (err) {
+      // Don't handle errors if request was aborted
+      if (err.name === 'AbortError' || err.code === 'ERR_CANCELED') {
+        console.log('Search request was aborted');
+        return;
+      }
+      
       console.error('Search error:', err);
       setError('Search failed. Please try again.');
       setResults([]);
     } finally {
       setLoading(false);
+      requestInProgress.current = false;
+      abortController.current = null;
     }
   };
 

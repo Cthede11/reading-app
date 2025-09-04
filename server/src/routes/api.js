@@ -5,7 +5,7 @@ const { scrapeNovelFull } = require('../scrapers/novelfull');
 const { extractChaptersWithPagination } = require('../scrapers/chapterExtractor');
 const { fetchWithFallback } = require('../utils/httpClient');
 const { searchCache, detailsCache } = require('../utils/cache');
-const { cleanText } = require('../utils/helpers');
+const { cleanText, sleep } = require('../utils/helpers');
 
 const router = express.Router();
 
@@ -19,6 +19,25 @@ router.get('/health', (req, res) => {
       details: detailsCache.size()
     }
   });
+});
+
+// Cache clearing endpoint
+router.post('/cache/clear', (req, res) => {
+  const { type } = req.body;
+  
+  if (type === 'search') {
+    searchCache.clear();
+    res.json({ message: 'Search cache cleared' });
+  } else if (type === 'details') {
+    detailsCache.clear();
+    res.json({ message: 'Details cache cleared' });
+  } else if (type === 'all') {
+    searchCache.clear();
+    detailsCache.clear();
+    res.json({ message: 'All caches cleared' });
+  } else {
+    res.status(400).json({ error: 'Invalid cache type. Use: search, details, or all' });
+  }
 });
 
 // Search endpoint
@@ -66,10 +85,14 @@ router.get('/search', async (req, res) => {
       console.warn('[API] NovelFull search failed:', novelfullResults.reason?.message);
     }
     
+    // Skip enhancement for now to avoid timeouts - return results as-is
+    console.log(`[API] Returning ${allResults.length} search results without enhancement to avoid timeouts`);
+    const finalResults = allResults;
+    
     const results = {
       query,
-      totalResults: allResults.length,
-      results: allResults
+      totalResults: finalResults.length,
+      results: finalResults
     };
     
     searchCache.set(cacheKey, results, 600000); // 10 minutes
@@ -97,6 +120,13 @@ router.get('/book/:source', async (req, res) => {
   
   try {
     console.log(`[API] Fetching book details for: ${url}`);
+    
+    // Add delay for NovelBin to prevent rate limiting
+    if (source === 'novelbin') {
+      console.log('[API] Adding delay for NovelBin to prevent rate limiting...');
+      await sleep(2000); // 2 second delay
+    }
+    
     const { data } = await fetchWithFallback(url);
     const cheerio = require('cheerio');
     const $ = cheerio.load(data);
@@ -119,20 +149,41 @@ router.get('/book/:source', async (req, res) => {
       }
     }
     
-    const authorSelectors = [
-      '.author',
-      '.book-author',
-      '.novel-author',
-      '.writer',
-      '.author-name'
-    ];
-    
+    // Extract author - NovelBin specific pattern
     let author = 'Unknown Author';
-    for (const selector of authorSelectors) {
-      const authorEl = $(selector).first();
-      if (authorEl.length > 0) {
-        author = cleanText(authorEl.text().replace(/^(Author|By|Written by):?\s*/i, ''));
-        if (author) break;
+    
+    // Look for h3 with "Author:" and get the next sibling
+    $('h3').each((i, el) => {
+      const $el = $(el);
+      const text = $el.text().trim();
+      if (text.includes('Author')) {
+        const nextSibling = $el.next();
+        if (nextSibling.length > 0) {
+          const authorText = cleanText(nextSibling.text());
+          if (authorText && authorText !== 'Unknown Author') {
+            author = authorText;
+            return false; // Break out of the loop
+          }
+        }
+      }
+    });
+    
+    // Fallback to standard selectors if NovelBin pattern didn't work
+    if (author === 'Unknown Author') {
+      const authorSelectors = [
+        '.author',
+        '.book-author',
+        '.novel-author',
+        '.writer',
+        '.author-name'
+      ];
+      
+      for (const selector of authorSelectors) {
+        const authorEl = $(selector).first();
+        if (authorEl.length > 0) {
+          author = cleanText(authorEl.text().replace(/^(Author|By|Written by):?\s*/i, ''));
+          if (author) break;
+        }
       }
     }
     
@@ -205,6 +256,13 @@ router.get('/chapter/:source', async (req, res) => {
   
   try {
     console.log(`[API] Fetching chapter content for: ${url}`);
+    
+    // Add delay for NovelBin to prevent rate limiting
+    if (source === 'novelbin') {
+      console.log('[API] Adding delay for NovelBin chapter to prevent rate limiting...');
+      await sleep(2000); // 2 second delay
+    }
+    
     const { data } = await fetchWithFallback(url);
     const cheerio = require('cheerio');
     const $ = cheerio.load(data);

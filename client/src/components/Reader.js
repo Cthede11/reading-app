@@ -436,6 +436,8 @@ const Reader = () => {
   // Refs
   const contentRef = useRef(null);
   const toastTimeoutRef = useRef(null);
+  const requestInProgress = useRef(false);
+  const abortController = useRef(null);
   
   // Extract data from location state
   const book = location.state?.book;
@@ -462,14 +464,40 @@ const Reader = () => {
     }, 3000);
   }, []);
   
+  // Cleanup effect to abort pending requests
+  useEffect(() => {
+    return () => {
+      if (abortController.current) {
+        abortController.current.abort();
+      }
+    };
+  }, []);
+
   // Fetch chapter content
-  const fetchChapterContent = useCallback(async () => {
+  const fetchChapterContent = useCallback(async (retryCount = 0) => {
+    // Prevent multiple concurrent requests
+    if (requestInProgress.current) {
+      console.log('Chapter request already in progress, skipping...');
+      return;
+    }
+    
     try {
+      requestInProgress.current = true;
       setLoading(true);
       setError('');
       
-      const response = await axios.get(`/api/chapter/${source}`, {
-        params: { url: chapter.link }
+      // Create abort controller for this request
+      abortController.current = new AbortController();
+      
+      // Add cache-busting parameter
+      const cacheBuster = `&_t=${Date.now()}`;
+      const response = await axios.get(`http://localhost:5000/api/chapter/${source}?url=${encodeURIComponent(chapter.link)}${cacheBuster}`, {
+        timeout: 15000, // 15 second timeout (reduced from 30s)
+        signal: abortController.current.signal,
+        headers: {
+          'Cache-Control': 'no-cache',
+          'Pragma': 'no-cache'
+        }
       });
       
       if (response.data.content) {
@@ -486,12 +514,36 @@ const Reader = () => {
         throw new Error('No content received');
       }
     } catch (err) {
+      // Don't handle errors if request was aborted
+      if (err.name === 'AbortError' || err.code === 'ERR_CANCELED') {
+        console.log('Chapter request was aborted');
+        return;
+      }
+      
       console.error('Chapter fetch error:', err);
-      setError(err.response?.data?.message || 'Failed to load chapter content. Please try again.');
+      
+      // Retry logic for 500 errors
+      if (err.response?.status === 500 && retryCount < 2) {
+        console.log(`Retrying chapter request (attempt ${retryCount + 1}/3)...`);
+        setTimeout(() => {
+          requestInProgress.current = false; // Reset flag before retry
+          fetchChapterContent(retryCount + 1);
+        }, 2000 * (retryCount + 1)); // Exponential backoff: 2s, 4s
+        return;
+      }
+      
+      // Check if it's a rate limiting error
+      if (err.response?.data?.details?.includes('Failed to fetch') && err.response?.data?.details?.includes('after 3 attempts')) {
+        setError('The website is temporarily blocking requests. Please try again in a few minutes.');
+      } else {
+        setError(err.response?.data?.message || 'Failed to load chapter content. Please try again.');
+      }
     } finally {
       setLoading(false);
+      requestInProgress.current = false;
+      abortController.current = null;
     }
-  }, [chapter, source]);
+  }, [chapter?.link, source]);
   
   // Initialize chapter
   useEffect(() => {
@@ -517,7 +569,7 @@ const Reader = () => {
     }
     
     fetchChapterContent();
-  }, [chapter, bookUrl, source, chapters.length, book, updateReadingProgress, getBookmarks, fetchChapterContent]);
+  }, [chapter?.link, bookUrl, source]); // Only depend on the actual values that should trigger re-fetch
   
   // Navigate to chapter
   const goToChapter = useCallback((index) => {

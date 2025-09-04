@@ -2,11 +2,11 @@ const cheerio = require('cheerio');
 const { fetchWithFallback } = require('../utils/httpClient');
 const { toAbsoluteUrl, cleanText } = require('../utils/helpers');
 
-// Known book mappings for direct URL matching
+// Known book mappings for direct URL matching (disabled to allow proper search)
 const knownBooks = {
-  'timeless assassin': 'https://novelbin.com/b/timeless-assassin',
-  'timeless assassain': 'https://novelbin.com/b/timeless-assassin', // Common misspelling
-  'timeless assasin': 'https://novelbin.com/b/timeless-assassin'   // Another misspelling
+  // 'timeless assassin': 'https://novelbin.com/b/timeless-assassin',
+  // 'timeless assassain': 'https://novelbin.com/b/timeless-assassin', // Common misspelling
+  // 'timeless assasin': 'https://novelbin.com/b/timeless-assassin'   // Another misspelling
 };
 
 // Search variations for better matching
