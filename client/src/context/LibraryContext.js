@@ -94,7 +94,7 @@ export const LibraryProvider = ({ children }) => {
       addedAt: new Date().toISOString(),
       lastReadAt: null,
       currentChapter: null,
-      totalChapters: 0,
+      totalChapters: book.totalChapters || book.chapters?.length || 0,
       category,
       rating: 0,
       notes: '',
@@ -146,6 +146,20 @@ export const LibraryProvider = ({ children }) => {
     ));
   };
 
+  const updateBookDetails = (bookId, details) => {
+    setSavedBooks(prev => prev.map(book => {
+      if (book.id === bookId) {
+        return {
+          ...book,
+          ...details,
+          totalChapters: details.totalChapters || details.chapters?.length || book.totalChapters,
+          updatedAt: new Date().toISOString()
+        };
+      }
+      return book;
+    }));
+  };
+
   // Reading progress functions
   const updateReadingProgress = (bookId, chapterIndex, totalChapters, chapterTitle = null) => {
     const now = new Date().toISOString();
@@ -168,7 +182,7 @@ export const LibraryProvider = ({ children }) => {
           ...book,
           lastReadAt: now,
           currentChapter: chapterIndex,
-          totalChapters
+          totalChapters: Math.max(book.totalChapters || 0, totalChapters)
         };
         
         // Auto-categorize based on progress
@@ -407,6 +421,7 @@ export const LibraryProvider = ({ children }) => {
     updateBookRating,
     updateBookNotes,
     updateBookTags,
+    updateBookDetails,
     
     // Reading progress
     updateReadingProgress,

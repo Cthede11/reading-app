@@ -592,6 +592,7 @@ const BookPage = () => {
     updateBookCategory,
     updateBookRating,
     getBookProgress,
+    updateBookDetails,
     categories
   } = useLibrary();
 
@@ -635,13 +636,22 @@ const BookPage = () => {
       
       // Update book info if we got more details
       if (bookDetails.title || bookDetails.author || bookDetails.description) {
-        setBook(prev => ({
-          ...prev,
-          title: bookDetails.title || prev?.title || 'Unknown Title',
-          author: bookDetails.author || prev?.author || 'Unknown Author',
-          description: bookDetails.description || prev?.description || '',
-          cover: bookDetails.cover || prev?.cover || ''
-        }));
+        const updatedBook = {
+          ...book,
+          title: bookDetails.title || book?.title || 'Unknown Title',
+          author: bookDetails.author || book?.author || 'Unknown Author',
+          description: bookDetails.description || book?.description || '',
+          cover: bookDetails.cover || book?.cover || '',
+          totalChapters: bookDetails.totalChapters || bookDetails.chapters?.length || 0
+        };
+        
+        setBook(updatedBook);
+        
+        // Update book details in library if it exists
+        if (isInLibrary) {
+          const bookId = `${source}-${bookUrl}`;
+          updateBookDetails(bookId, updatedBook);
+        }
       }
     } catch (err) {
       console.error('Error fetching book details:', err);
