@@ -3,8 +3,10 @@ const { scrapeNovelBin } = require('../scrapers/novelbin');
 const { scrapeLightNovelWorld } = require('../scrapers/lightnovelworld');
 const { scrapeNovelFull } = require('../scrapers/novelfull');
 const { extractChaptersWithPagination } = require('../scrapers/chapterExtractor');
+const { multiStrategyScraper } = require('../scrapers/multiStrategyScraper');
+const { robustHttpClient } = require('../utils/robustHttpClient');
 const { fetchWithFallback } = require('../utils/httpClient');
-const { searchCache, detailsCache } = require('../utils/cache');
+const { searchCache, detailsCache, chapterCache } = require('../utils/cache');
 const { cleanText, sleep } = require('../utils/helpers');
 
 const router = express.Router();
@@ -16,9 +18,32 @@ router.get('/health', (req, res) => {
     timestamp: new Date().toISOString(),
     caches: {
       search: searchCache.size(),
-      details: detailsCache.size()
-    }
+      details: detailsCache.size(),
+      chapters: chapterCache.size()
+    },
+    circuitBreakers: robustHttpClient.getCircuitBreakerStatus()
   });
+});
+
+// Circuit breaker management endpoint
+router.get('/circuit-breakers', (req, res) => {
+  res.json({
+    status: robustHttpClient.getCircuitBreakerStatus(),
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Reset circuit breaker endpoint
+router.post('/circuit-breakers/reset', (req, res) => {
+  const { domain } = req.body;
+  
+  if (domain) {
+    robustHttpClient.resetCircuitBreaker(domain);
+    res.json({ message: `Circuit breaker reset for ${domain}` });
+  } else {
+    robustHttpClient.resetAllCircuitBreakers();
+    res.json({ message: 'All circuit breakers reset' });
+  }
 });
 
 // Cache clearing endpoint
@@ -31,12 +56,16 @@ router.post('/cache/clear', (req, res) => {
   } else if (type === 'details') {
     detailsCache.clear();
     res.json({ message: 'Details cache cleared' });
+  } else if (type === 'chapters') {
+    chapterCache.clear();
+    res.json({ message: 'Chapter cache cleared' });
   } else if (type === 'all') {
     searchCache.clear();
     detailsCache.clear();
+    chapterCache.clear();
     res.json({ message: 'All caches cleared' });
   } else {
-    res.status(400).json({ error: 'Invalid cache type. Use: search, details, or all' });
+    res.status(400).json({ error: 'Invalid cache type. Use: search, details, chapters, or all' });
   }
 });
 
@@ -103,7 +132,7 @@ router.get('/search', async (req, res) => {
   }
 });
 
-// Book details endpoint
+// Book details endpoint with robust scraping
 router.get('/book/:source', async (req, res) => {
   const { source } = req.params;
   const { url } = req.query;
@@ -119,133 +148,95 @@ router.get('/book/:source', async (req, res) => {
   }
   
   try {
-    console.log(`[API] Fetching book details for: ${url}`);
+    console.log(`[API] Fetching book details for: ${url} with robust scraper`);
     
-    // Add delay for NovelBin to prevent rate limiting
-    if (source === 'novelbin') {
-      console.log('[API] Adding delay for NovelBin to prevent rate limiting...');
-      await sleep(2000); // 2 second delay
-    }
+    // Try multiple scraping strategies
+    let bookDetails = null;
+    const strategies = ['multiStrategy', 'legacy'];
     
-    const { data } = await fetchWithFallback(url);
-    const cheerio = require('cheerio');
-    const $ = cheerio.load(data);
-    
-    // Extract basic book info
-    const titleSelectors = [
-      'h1',
-      '.novel-title',
-      '.book-title',
-      '.title',
-      'h1.title'
-    ];
-    
-    let title = 'Unknown Title';
-    for (const selector of titleSelectors) {
-      const titleEl = $(selector).first();
-      if (titleEl.length > 0) {
-        title = cleanText(titleEl.text());
-        if (title) break;
-      }
-    }
-    
-    // Extract author - NovelBin specific pattern
-    let author = 'Unknown Author';
-    
-    // Look for h3 with "Author:" and get the next sibling
-    $('h3').each((i, el) => {
-      const $el = $(el);
-      const text = $el.text().trim();
-      if (text.includes('Author')) {
-        const nextSibling = $el.next();
-        if (nextSibling.length > 0) {
-          const authorText = cleanText(nextSibling.text());
-          if (authorText && authorText !== 'Unknown Author') {
-            author = authorText;
-            return false; // Break out of the loop
+    for (const strategy of strategies) {
+      try {
+        if (strategy === 'multiStrategy') {
+          // Use the new robust multi-strategy scraper
+          bookDetails = await multiStrategyScraper.scrapeBookDetails(url, source);
+        } else if (strategy === 'legacy') {
+          // Fallback to legacy scraper
+          console.log(`[API] Trying legacy scraper for ${source}...`);
+          
+          if (source === 'novelbin') {
+            bookDetails = await scrapeNovelBin(url);
+          } else if (source === 'lightnovelworld') {
+            bookDetails = await scrapeLightNovelWorld(url);
+          } else if (source === 'novelfull') {
+            bookDetails = await scrapeNovelFull(url);
+          } else {
+            // Generic scraping
+            const { data } = await robustHttpClient.fetchWithRetry(url);
+            const cheerio = require('cheerio');
+            const $ = cheerio.load(data);
+            
+            bookDetails = {
+              title: multiStrategyScraper.extractTitle($, 'generic'),
+              author: multiStrategyScraper.extractAuthor($, 'generic'),
+              description: multiStrategyScraper.extractDescription($, 'generic'),
+              cover: multiStrategyScraper.extractCover($, 'generic', url),
+              chapters: multiStrategyScraper.extractChapters($, 'generic', url),
+              totalChapters: 0,
+              source
+            };
+            
+            bookDetails.totalChapters = bookDetails.chapters.length;
           }
         }
-      }
-    });
-    
-    // Fallback to standard selectors if NovelBin pattern didn't work
-    if (author === 'Unknown Author') {
-      const authorSelectors = [
-        '.author',
-        '.book-author',
-        '.novel-author',
-        '.writer',
-        '.author-name'
-      ];
-      
-      for (const selector of authorSelectors) {
-        const authorEl = $(selector).first();
-        if (authorEl.length > 0) {
-          author = cleanText(authorEl.text().replace(/^(Author|By|Written by):?\s*/i, ''));
-          if (author) break;
+        
+        // Validate the scraped data
+        if (bookDetails && bookDetails.title && bookDetails.title !== 'Unknown Title') {
+          console.log(`[API] Successfully scraped with ${strategy} strategy: ${bookDetails.title}`);
+          break;
         }
+        
+      } catch (error) {
+        console.warn(`[API] Strategy ${strategy} failed for ${url}:`, error.message);
+        continue;
       }
     }
     
-    const descriptionSelectors = [
-      '.description',
-      '.synopsis',
-      '.summary',
-      '.book-description',
-      '.novel-description'
-    ];
-    
-    let description = 'No description available';
-    for (const selector of descriptionSelectors) {
-      const descEl = $(selector).first();
-      if (descEl.length > 0) {
-        description = cleanText(descEl.text());
-        if (description) break;
-      }
+    if (!bookDetails) {
+      throw new Error('All scraping strategies failed');
     }
     
-    const coverSelectors = [
-      '.book-cover img',
-      '.novel-cover img',
-      '.cover img',
-      'img[alt*="cover"]',
-      'img[src*="cover"]'
-    ];
-    
-    let cover = '';
-    for (const selector of coverSelectors) {
-      const coverEl = $(selector).first();
-      if (coverEl.length > 0) {
-        cover = coverEl.attr('src') || coverEl.attr('data-src');
-        if (cover) break;
-      }
-    }
-    
-    // Extract chapters with pagination
-    console.log(`[API] Extracting chapters for ${source}...`);
-    const chapters = await extractChaptersWithPagination($, source, url, 20);
-    
-    const bookDetails = {
-      title,
-      author,
-      description,
-      cover: cover ? (cover.startsWith('http') ? cover : `https://novelbin.com${cover}`) : '',
-      chapters,
-      totalChapters: chapters.length,
-      source
-    };
-    
+    // Cache the results
     detailsCache.set(cacheKey, bookDetails, 1800000); // 30 minutes
-    console.log(`[API] Book details extracted: ${title} with ${chapters.length} chapters`);
+    console.log(`[API] Book details extracted: ${bookDetails.title} with ${bookDetails.totalChapters} chapters`);
     res.json(bookDetails);
     
   } catch (error) {
     console.error('[API] Book details error:', error.message);
-    res.status(500).json({ error: 'Failed to fetch book details', details: error.message });
+    
+    // Return more specific error information
+    let errorMessage = 'Failed to fetch book details';
+    let errorDetails = error.message;
+    
+    if (error.message.includes('Circuit breaker open')) {
+      errorMessage = 'Website is temporarily unavailable due to too many requests';
+      errorDetails = 'Please try again in a few minutes';
+    } else if (error.message.includes('timeout')) {
+      errorMessage = 'Request timed out - website may be slow';
+      errorDetails = 'Please try again later';
+    } else if (error.message.includes('ERR_NETWORK') || error.message.includes('ECONNREFUSED')) {
+      errorMessage = 'Network connection failed';
+      errorDetails = 'Please check your internet connection';
+    }
+    
+    res.status(500).json({ 
+      error: errorMessage, 
+      details: errorDetails,
+      retryable: !error.message.includes('Circuit breaker open')
+    });
   }
 });
 
-// Chapter content endpoint
+// Chapter content endpoint with robust scraping
 router.get('/chapter/:source', async (req, res) => {
   const { source } = req.params;
   const { url } = req.query;
@@ -254,65 +245,192 @@ router.get('/chapter/:source', async (req, res) => {
     return res.status(400).json({ error: 'URL parameter is required' });
   }
   
+  const cacheKey = `chapter:${source}:${url}`;
+  if (chapterCache.has(cacheKey)) {
+    console.log(`[API] Returning cached chapter content for: ${url}`);
+    return res.json(chapterCache.get(cacheKey));
+  }
+  
   try {
-    console.log(`[API] Fetching chapter content for: ${url}`);
+    console.log(`[API] Fetching chapter content for: ${url} with robust scraper`);
     
-    // Add delay for NovelBin to prevent rate limiting
-    if (source === 'novelbin') {
-      console.log('[API] Adding delay for NovelBin chapter to prevent rate limiting...');
-      await sleep(2000); // 2 second delay
-    }
+    // Try multiple strategies for chapter content
+    let chapterData = null;
+    const strategies = ['robust', 'legacy'];
     
-    const { data } = await fetchWithFallback(url);
-    const cheerio = require('cheerio');
-    const $ = cheerio.load(data);
-    
-    // Extract chapter content
-    const contentSelectors = [
-      '#chapter-content',
-      '.chapter-content',
-      '.content',
-      '.chapter-text',
-      '.novel-content',
-      '.reading-content'
-    ];
-    
-    let content = '';
-    for (const selector of contentSelectors) {
-      const contentEl = $(selector);
-      if (contentEl.length > 0) {
-        content = contentEl.html();
-        if (content) break;
+    for (const strategy of strategies) {
+      try {
+        if (strategy === 'robust') {
+          // Use robust HTTP client with retry logic
+          const response = await robustHttpClient.fetchWithRetry(url);
+          const cheerio = require('cheerio');
+          const $ = cheerio.load(response.data);
+          
+          // Extract chapter content with multiple selectors
+          const contentSelectors = [
+            '#chapter-content',
+            '.chapter-content',
+            '.content',
+            '.chapter-text',
+            '.novel-content',
+            '.reading-content',
+            '.chapter-body',
+            '.entry-content',
+            '.post-content',
+            'article .content',
+            'main .content'
+          ];
+          
+          let content = '';
+          for (const selector of contentSelectors) {
+            const contentEl = $(selector);
+            if (contentEl.length > 0) {
+              content = contentEl.html();
+              if (content && content.trim().length > 100) {
+                break;
+              }
+            }
+          }
+          
+          // Extract chapter title with multiple selectors
+          const titleSelectors = [
+            'h1',
+            '.chapter-title',
+            '.title',
+            'h2',
+            '.entry-title',
+            '.post-title',
+            'article h1',
+            'main h1'
+          ];
+          
+          let title = 'Unknown Chapter';
+          for (const selector of titleSelectors) {
+            const titleEl = $(selector).first();
+            if (titleEl.length > 0) {
+              const titleText = cleanText(titleEl.text());
+              if (titleText && titleText.length > 0) {
+                title = titleText;
+                break;
+              }
+            }
+          }
+          
+          // Calculate word count
+          const wordCount = content ? content.replace(/<[^>]*>/g, '').split(/\s+/).length : 0;
+          
+          chapterData = {
+            title,
+            content,
+            url,
+            source,
+            wordCount,
+            cachedAt: new Date().toISOString(),
+            strategy: 'robust'
+          };
+          
+        } else if (strategy === 'legacy') {
+          // Fallback to legacy method
+          console.log(`[API] Trying legacy chapter scraper for ${source}...`);
+          
+          const { data } = await fetchWithFallback(url);
+          const cheerio = require('cheerio');
+          const $ = cheerio.load(data);
+          
+          // Extract chapter content
+          const contentSelectors = [
+            '#chapter-content',
+            '.chapter-content',
+            '.content',
+            '.chapter-text',
+            '.novel-content',
+            '.reading-content'
+          ];
+          
+          let content = '';
+          for (const selector of contentSelectors) {
+            const contentEl = $(selector);
+            if (contentEl.length > 0) {
+              content = contentEl.html();
+              if (content) break;
+            }
+          }
+          
+          // Extract chapter title
+          const titleSelectors = [
+            'h1',
+            '.chapter-title',
+            '.title',
+            'h2'
+          ];
+          
+          let title = 'Unknown Chapter';
+          for (const selector of titleSelectors) {
+            const titleEl = $(selector).first();
+            if (titleEl.length > 0) {
+              title = cleanText(titleEl.text());
+              if (title) break;
+            }
+          }
+          
+          // Calculate word count
+          const wordCount = content ? content.replace(/<[^>]*>/g, '').split(/\s+/).length : 0;
+          
+          chapterData = {
+            title,
+            content,
+            url,
+            source,
+            wordCount,
+            cachedAt: new Date().toISOString(),
+            strategy: 'legacy'
+          };
+        }
+        
+        // Validate the scraped data
+        if (chapterData && chapterData.content && chapterData.content.trim().length > 50) {
+          console.log(`[API] Successfully scraped chapter with ${strategy} strategy: ${chapterData.title}`);
+          break;
+        }
+        
+      } catch (error) {
+        console.warn(`[API] Chapter strategy ${strategy} failed for ${url}:`, error.message);
+        continue;
       }
     }
     
-    // Extract chapter title
-    const titleSelectors = [
-      'h1',
-      '.chapter-title',
-      '.title',
-      'h2'
-    ];
-    
-    let title = 'Unknown Chapter';
-    for (const selector of titleSelectors) {
-      const titleEl = $(selector).first();
-      if (titleEl.length > 0) {
-        title = cleanText(titleEl.text());
-        if (title) break;
-      }
+    if (!chapterData) {
+      throw new Error('All chapter scraping strategies failed');
     }
     
-    res.json({
-      title,
-      content,
-      url,
-      source
-    });
+    // Cache for 1 hour
+    chapterCache.set(cacheKey, chapterData, 3600000);
+    
+    res.json(chapterData);
     
   } catch (error) {
     console.error('[API] Chapter content error:', error.message);
-    res.status(500).json({ error: 'Failed to fetch chapter content', details: error.message });
+    
+    // Return more specific error information
+    let errorMessage = 'Failed to fetch chapter content';
+    let errorDetails = error.message;
+    
+    if (error.message.includes('Circuit breaker open')) {
+      errorMessage = 'Website is temporarily unavailable due to too many requests';
+      errorDetails = 'Please try again in a few minutes';
+    } else if (error.message.includes('timeout')) {
+      errorMessage = 'Request timed out - website may be slow';
+      errorDetails = 'Please try again later';
+    } else if (error.message.includes('ERR_NETWORK') || error.message.includes('ECONNREFUSED')) {
+      errorMessage = 'Network connection failed';
+      errorDetails = 'Please check your internet connection';
+    }
+    
+    res.status(500).json({ 
+      error: errorMessage, 
+      details: errorDetails,
+      retryable: !error.message.includes('Circuit breaker open')
+    });
   }
 });
 

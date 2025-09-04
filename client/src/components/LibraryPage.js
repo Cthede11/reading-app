@@ -276,6 +276,90 @@ const RemoveButton = styled.button`
   }
 `;
 
+const DownloadStatus = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+  font-size: 0.9rem;
+`;
+
+const StatusBadge = styled.span`
+  padding: 0.25rem 0.5rem;
+  border-radius: 12px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  
+  &.pending {
+    background-color: #ffc107;
+    color: #000;
+  }
+  
+  &.downloading {
+    background-color: #17a2b8;
+    color: white;
+  }
+  
+  &.completed {
+    background-color: #28a745;
+    color: white;
+  }
+  
+  &.failed {
+    background-color: #dc3545;
+    color: white;
+  }
+`;
+
+const DownloadProgressBar = styled.div`
+  width: 100%;
+  height: 4px;
+  background-color: var(--border-light);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-top: 0.5rem;
+  
+  .theme-dark & {
+    background-color: var(--border-dark);
+  }
+  
+  .theme-sepia & {
+    background-color: var(--border-sepia);
+  }
+`;
+
+const DownloadProgressFill = styled.div`
+  height: 100%;
+  background-color: var(--accent-light);
+  width: ${props => props.progress}%;
+  transition: width 0.3s ease;
+  
+  .theme-dark & {
+    background-color: var(--accent-dark);
+  }
+  
+  .theme-sepia & {
+    background-color: var(--accent-sepia);
+  }
+`;
+
+const RetryButton = styled.button`
+  padding: 0.25rem 0.5rem;
+  border: 1px solid #ffc107;
+  border-radius: 4px;
+  background: none;
+  color: #ffc107;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  font-size: 0.8rem;
+  
+  &:hover {
+    background-color: #ffc107;
+    color: #000;
+  }
+`;
+
 const EmptyState = styled.div`
   text-align: center;
   padding: 3rem;
@@ -311,12 +395,13 @@ const LibraryPage = () => {
     readingProgress, 
     removeBookFromLibrary, 
     getBookProgress,
-      getReadingStats 
+    getReadingStats,
+    retryDownload
   } = useLibrary();
   const navigate = useNavigate();
   const [filter, setFilter] = useState('all'); // all, reading, completed
 
-    const stats = getReadingStats();
+  const stats = getReadingStats();
 
   const handleContinueReading = (book) => {
     const progress = getBookProgress(book.id);
@@ -448,6 +533,28 @@ const LibraryPage = () => {
                 <BookTitle>{book.title}</BookTitle>
                 {book.author && <BookAuthor>by {book.author}</BookAuthor>}
                 <BookSource>{book.source}</BookSource>
+                
+                {/* Download Status */}
+                {book.downloadStatus && (
+                  <DownloadStatus>
+                    <StatusBadge className={book.downloadStatus}>
+                      {book.downloadStatus}
+                    </StatusBadge>
+                    {book.downloadStatus === 'downloading' && (
+                      <span>{book.downloadProgress}%</span>
+                    )}
+                    {book.downloadStatus === 'failed' && (
+                      <RetryButton onClick={() => retryDownload(book.id)}>
+                        Retry
+                      </RetryButton>
+                    )}
+                    {book.downloadStatus === 'downloading' && (
+                      <DownloadProgressBar>
+                        <DownloadProgressFill progress={book.downloadProgress} />
+                      </DownloadProgressBar>
+                    )}
+                  </DownloadStatus>
+                )}
                 
                 {progress && (
                   <>

@@ -593,6 +593,8 @@ const BookPage = () => {
     updateBookRating,
     getBookProgress,
     updateBookDetails,
+    getCachedBookDetails,
+    retryDownload,
     categories
   } = useLibrary();
 
@@ -625,7 +627,20 @@ const BookPage = () => {
     }
     
     if (bookUrl) {
-      fetchBookDetails();
+      // Check for cached data first
+      const bookId = `${source}-${bookUrl}`;
+      const cachedBook = getCachedBookDetails(bookId);
+      
+      if (cachedBook && cachedBook.chapters && cachedBook.chapters.length > 0) {
+        // Use cached data
+        setBook(cachedBook);
+        setChapters(cachedBook.chapters || []);
+        setLoading(false);
+        console.log('Using cached book data');
+      } else {
+        // Fetch fresh data
+        fetchBookDetails();
+      }
     } else {
       setError('Book information not found');
       setLoading(false);
@@ -800,9 +815,9 @@ const BookPage = () => {
     }
   };
 
-  const handleAddToLibrary = () => {
+  const handleAddToLibrary = async () => {
     if (book) {
-      const success = addBookToLibrary(book);
+      const success = await addBookToLibrary(book);
       if (success) {
         setIsInLibrary(true);
       }

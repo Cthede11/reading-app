@@ -778,12 +778,12 @@ const saveRecentSearch =  (searchQuery) => {
     });
   };
 
-  const handleAddToLibrary = (book, e) => {
+  const handleAddToLibrary = async (book, e) => {
     e.stopPropagation();
-    const success = addBookToLibrary(book);
+    const success = await addBookToLibrary(book);
     if (success) {
       // Show success feedback
-      setMessage(`"${book.title}" added to your library!`);
+      setMessage(`"${book.title}" added to your library! Downloading details in background...`);
     } else {
       setMessage(`"${book.title}" is already in your library.`);
     }

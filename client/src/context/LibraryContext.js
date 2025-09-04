@@ -80,7 +80,7 @@ export const LibraryProvider = ({ children }) => {
   }, [categories]);
 
   // Book management functions
-  const addBookToLibrary = (book, category = 'Want to Read') => {
+  const addBookToLibrary = async (book, category = 'Want to Read') => {
     const bookId = `${book.source}-${book.link}`;
     
     // Check if book already exists
@@ -98,10 +98,16 @@ export const LibraryProvider = ({ children }) => {
       category,
       rating: 0,
       notes: '',
-      tags: []
+      tags: [],
+      downloadStatus: 'pending', // Track download status
+      downloadProgress: 0
     };
 
     setSavedBooks(prev => [...prev, bookToSave]);
+    
+    // Start background download
+    downloadBookDetails(bookId, book);
+    
     return true;
   };
 
@@ -158,6 +164,99 @@ export const LibraryProvider = ({ children }) => {
       }
       return book;
     }));
+  };
+
+  // Background download functionality
+  const downloadBookDetails = async (bookId, book) => {
+    try {
+      // Update status to downloading
+      updateBookDownloadStatus(bookId, 'downloading', 10);
+      
+      const response = await fetch(`http://localhost:5000/api/book/${book.source}?url=${encodeURIComponent(book.link)}`);
+      
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      
+      const bookDetails = await response.json();
+      
+      // Update progress
+      updateBookDownloadStatus(bookId, 'downloading', 50);
+      
+      // Update book with downloaded details
+      const updatedBook = {
+        ...book,
+        title: bookDetails.title || book.title,
+        author: bookDetails.author || book.author,
+        description: bookDetails.description || book.description,
+        cover: bookDetails.cover || book.cover,
+        chapters: bookDetails.chapters || [],
+        totalChapters: bookDetails.totalChapters || bookDetails.chapters?.length || 0
+      };
+      
+      // Update progress
+      updateBookDownloadStatus(bookId, 'downloading', 80);
+      
+      // Save to localStorage for offline access
+      const cacheKey = `book_cache_${bookId}`;
+      localStorage.setItem(cacheKey, JSON.stringify({
+        bookDetails: updatedBook,
+        downloadedAt: new Date().toISOString(),
+        version: '1.0'
+      }));
+      
+      // Update book in library
+      updateBookDetails(bookId, updatedBook);
+      
+      // Mark as completed
+      updateBookDownloadStatus(bookId, 'completed', 100);
+      
+      console.log(`Successfully downloaded book details for: ${book.title}`);
+      
+    } catch (error) {
+      console.error('Error downloading book details:', error);
+      updateBookDownloadStatus(bookId, 'failed', 0);
+    }
+  };
+
+  const updateBookDownloadStatus = (bookId, status, progress) => {
+    setSavedBooks(prev => prev.map(book => {
+      if (book.id === bookId) {
+        return {
+          ...book,
+          downloadStatus: status,
+          downloadProgress: progress,
+          updatedAt: new Date().toISOString()
+        };
+      }
+      return book;
+    }));
+  };
+
+  const getCachedBookDetails = (bookId) => {
+    try {
+      const cacheKey = `book_cache_${bookId}`;
+      const cached = localStorage.getItem(cacheKey);
+      if (cached) {
+        const data = JSON.parse(cached);
+        // Check if cache is not too old (7 days)
+        const cacheAge = Date.now() - new Date(data.downloadedAt).getTime();
+        if (cacheAge < 7 * 24 * 60 * 60 * 1000) {
+          return data.bookDetails;
+        }
+      }
+    } catch (error) {
+      console.error('Error reading cached book details:', error);
+    }
+    return null;
+  };
+
+  const retryDownload = (bookId) => {
+    const book = savedBooks.find(b => b.id === bookId);
+    if (book) {
+      updateBookDownloadStatus(bookId, 'pending', 0);
+      downloadBookDetails(bookId, book);
+    }
   };
 
   // Reading progress functions
@@ -422,6 +521,12 @@ export const LibraryProvider = ({ children }) => {
     updateBookNotes,
     updateBookTags,
     updateBookDetails,
+    
+    // Background download
+    downloadBookDetails,
+    updateBookDownloadStatus,
+    getCachedBookDetails,
+    retryDownload,
     
     // Reading progress
     updateReadingProgress,
