@@ -6,10 +6,10 @@ const { toAbsoluteUrl, extractChapterNumber, deduplicateAndSortChapters, cleanTe
 function isValidChapter(title, link) {
   if (!title || !link) return false;
   
-  const lowerTitle = title.toLowerCase();
+  const lowerTitle = title.toLowerCase().trim();
   const lowerLink = link.toLowerCase();
   
-  // Filter out navigation elements
+  // Filter out navigation elements and invalid entries
   const invalidTitles = [
     'read now',
     'chapter list',
@@ -32,12 +32,16 @@ function isValidChapter(title, link) {
     'cookie',
     'sitemap',
     'rss',
-    'feed'
+    'feed',
+    'more',
+    'see all',
+    'expand',
+    'collapse'
   ];
   
   // Check if title contains invalid keywords
   for (const invalid of invalidTitles) {
-    if (lowerTitle.includes(invalid)) {
+    if (lowerTitle === invalid || lowerTitle.includes(invalid)) {
       return false;
     }
   }
@@ -59,15 +63,25 @@ function isValidChapter(title, link) {
     return false;
   }
   
+  // Additional validation: must have a proper chapter URL structure
+  if (!lowerLink.includes('chapter') && !lowerLink.includes('/ch-') && !lowerLink.includes('/c/')) {
+    return false;
+  }
+  
+  // Filter out hash links (like #tab-chapters)
+  if (lowerLink.startsWith('#')) {
+    return false;
+  }
+  
   return true;
 }
 
 // Chapter selectors for different sources
 const chapterSelectors = {
   novelbin: [
-    '.chapter-list a',
     '.list-chapter a',
     '#list-chapter a',
+    '.chapter-list a',
     'a[href*="chapter"]',
     'a[href*="/ch-"]',
     'a[href*="/c/"]',
@@ -270,11 +284,16 @@ async function tryAjaxChapterLoading(baseUrl) {
           const $el = $(el);
           const title = $el.text().trim();
           const link = $el.attr('href');
-          if (title && link) {
+          if (title && link && isValidChapter(title, link)) {
             chapters.push({ title, link });
           }
         });
       }
+      
+      // Filter chapters using validation
+      chapters = chapters.filter(chapter => 
+        isValidChapter(chapter.title, chapter.link)
+      );
       
       if (chapters.length > 0) {
         console.log(`[ChapterExtractor] AJAX loading successful: ${chapters.length} chapters`);
@@ -385,6 +404,94 @@ async function findChaptersOnMainPage(baseUrl) {
   return null;
 }
 
+// Function to generate missing chapters for NovelBin based on the URL pattern
+async function generateMissingChapters(baseUrl, $) {
+  console.log(`[ChapterExtractor] Generating missing chapters for NovelBin...`);
+  
+  const generatedChapters = [];
+  
+  try {
+    // First, extract the existing chapters to find the range
+    const existingChapters = [];
+    $('a[href*="chapter"]').each((_, el) => {
+      const $el = $(el);
+      const title = cleanText($el.text());
+      const link = $el.attr('href');
+      
+      if (title && link && isValidChapter(title, link)) {
+        const match = title.match(/Chapter (\d+)/i);
+        if (match) {
+          existingChapters.push({
+            number: parseInt(match[1]),
+            title,
+            link: toAbsoluteUrl(link, baseUrl)
+          });
+        }
+      }
+    });
+    
+    if (existingChapters.length === 0) {
+      console.log(`[ChapterExtractor] No existing chapters found to base generation on`);
+      return generatedChapters;
+    }
+    
+    // Sort by chapter number
+    existingChapters.sort((a, b) => a.number - b.number);
+    
+    const minChapter = existingChapters[0].number;
+    const maxChapter = existingChapters[existingChapters.length - 1].number;
+    
+    console.log(`[ChapterExtractor] Found chapters ${minChapter} to ${maxChapter}`);
+    
+    // Check if there's a gap indicating more chapters exist
+    if (maxChapter - minChapter > existingChapters.length) {
+      console.log(`[ChapterExtractor] Gap detected, checking for more chapters...`);
+      
+      // Test a few higher chapter numbers to find the actual maximum
+      const testChapters = [maxChapter + 10, maxChapter + 50, maxChapter + 100, maxChapter + 200];
+      let actualMaxChapter = maxChapter;
+      
+      for (const testChapter of testChapters) {
+        try {
+          const testUrl = `${baseUrl}/chapter-${testChapter}`;
+          const { data } = await fetchWithFallback(testUrl);
+          
+          // Check if the page contains actual chapter content (not just a 404 or redirect)
+          if (data.includes('chapter') && data.includes('content') && !data.includes('404')) {
+            actualMaxChapter = testChapter;
+            console.log(`[ChapterExtractor] Found chapter ${testChapter} exists`);
+          } else {
+            break; // Stop if we hit a non-existent chapter
+          }
+        } catch (error) {
+          console.log(`[ChapterExtractor] Chapter ${testChapter} not found: ${error.message}`);
+          break;
+        }
+      }
+      
+      console.log(`[ChapterExtractor] Actual chapter range: ${minChapter} to ${actualMaxChapter}`);
+      
+      // Generate missing chapters
+      for (let i = minChapter; i <= actualMaxChapter; i++) {
+        const existingChapter = existingChapters.find(ch => ch.number === i);
+        if (!existingChapter) {
+          // Generate a chapter entry for the missing chapter
+          const chapterUrl = `${baseUrl}/chapter-${i}`;
+          generatedChapters.push({
+            title: `Chapter ${i}`,
+            link: chapterUrl
+          });
+        }
+      }
+    }
+    
+  } catch (error) {
+    console.error(`[ChapterExtractor] Error generating missing chapters: ${error.message}`);
+  }
+  
+  return generatedChapters;
+}
+
 async function extractChaptersWithPagination($, source, baseUrl, maxPages = 50) {
   console.log(`[ChapterExtractor] Extracting chapters with pagination for ${source}`);
   
@@ -397,7 +504,7 @@ async function extractChaptersWithPagination($, source, baseUrl, maxPages = 50) 
     const ajaxChapters = await tryAjaxChapterLoading(baseUrl);
     if (ajaxChapters && ajaxChapters.length > 0) {
       console.log(`[ChapterExtractor] AJAX loading found ${ajaxChapters.length} chapters`);
-      return deduplicateAndSortChapters(ajaxChapters);
+      allChapters.push(...ajaxChapters);
     }
     
     // Try to find the chapter list page with aggressive search
@@ -412,6 +519,13 @@ async function extractChaptersWithPagination($, source, baseUrl, maxPages = 50) 
         console.log(`[ChapterExtractor] Found ${mainPageChapters.linkCount} chapter links on main page`);
         $ = mainPageChapters.$;
       }
+    }
+    
+    // For NovelBin, try to generate missing chapters based on the pattern
+    const generatedChapters = await generateMissingChapters(baseUrl, $);
+    if (generatedChapters.length > 0) {
+      console.log(`[ChapterExtractor] Generated ${generatedChapters.length} additional chapters`);
+      allChapters.push(...generatedChapters);
     }
   }
   
@@ -508,7 +622,7 @@ async function extractChaptersWithPagination($, source, baseUrl, maxPages = 50) 
     }
   }
   
-  // Deduplicate and sort all chapters
+  // Deduplicate and sort all chapters (including generated ones)
   const uniqueChapters = deduplicateAndSortChapters(allChapters);
   
   console.log(`[ChapterExtractor] Pagination complete: ${uniqueChapters.length} total chapters across ${currentPage} pages`);
